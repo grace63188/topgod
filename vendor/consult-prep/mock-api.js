@@ -430,9 +430,51 @@
     var s3 = S3();
     return { id: r.id, receiptId: r.receiptId, createdAt: r.createdAt, due: r.due || '', status: s3.supplementStatus(r.items), statusLabel: s3.supplementStatusLabel(r), total: r.items.length, done: r.items.filter(function (x) { return x.status === 'done'; }).length,
       notice: r.notice || '', link: r.link || '', pushed: r.pushed || null, finishedAt: r.finishedAt || '',
-      items: r.items.map(function (it) { return { id: it.id, type: it.type, typeLabel: (s3.SUPPLEMENT.types.filter(function (t) { return t.id === it.type; })[0] || {}).label || it.type, ref: it.ref, title: it.title, note: it.note, due: it.due, status: it.status, doneAt: it.doneAt, content: it.content, needFolder: !!it.needFolder, folderName: it.folderName || '', folderId: it.folderId || '', toFull: !!it.toFull }; }) };
+      fileOpen: s3.supplementFileOpen(r),   // 3.3.8
+      items: r.items.map(function (it) {
+        var o = { id: it.id, type: it.type, typeLabel: (s3.SUPPLEMENT.types.filter(function (t) { return t.id === it.type; })[0] || {}).label || it.type, ref: it.ref, title: it.title, note: it.note, due: it.due, status: it.status, doneAt: it.doneAt, content: it.content, needFolder: !!it.needFolder, folderName: it.folderName || '', folderId: it.folderId || '', toFull: !!it.toFull };
+        if (it.file || it.ret) { var fp = s3.supplementFilePublic(it, suppFileLinks(r, it)); if (fp.file) o.file = fp.file; if (fp.ret) o.ret = fp.ret; }   // 3.3.8 同 Code.gs
+        return o;
+      }) };
   }
   function suppToken(rid, sid) { return keyHash('supp.' + rid + '.' + sid) + keyHash(sid + '.' + rid).slice(0, 8); }
+  /* ---- 3.3.8 補件附檔與回傳（同 gas/drive.gs；檔案只保留在本次瀏覽） ---- */
+  function suppFileSig(kind, rid, sid, iid) { return keyHash(kind + '.' + rid + '.' + sid + '.' + iid).slice(0, 12); }
+  function suppFileLinks(r, it) {
+    var s3 = S3(), o = {};
+    if (it.file && it.file.kind === 'drive') o.sf = s3.suppDlUrl('sf', s3.suppDlToken(r.receiptId, r.id, it.id, suppFileSig('sfdl', r.receiptId, r.id, it.id)));
+    if (it.ret && it.ret.id) o.sr = s3.suppDlUrl('sr', s3.suppDlToken(r.receiptId, r.id, it.id, suppFileSig('srdl', r.receiptId, r.id, it.id)));
+    return o;
+  }
+  function suppItemOf(db, rid, sid, iid) {
+    var r = ((db.supplements || {})[String(rid)] || []).filter(function (x) { return x.id === String(sid); })[0];
+    return r ? { r: r, it: r.items.filter(function (x) { return x.id === String(iid); })[0] || null } : { r: null, it: null };
+  }
+  function suppDlUrlMock(id) { return 'https://drive.google.com/uc?export=download&confirm=t&id=' + encodeURIComponent(id); }
+  function suppUpCheck(req) {
+    var s3 = S3(), nm = s3.suppFileName(req.name), size = Math.floor(Number(req.size) || 0);
+    if (!nm || !s3.suppFileOk(nm)) return { fail: fail('檔案格式須為 ' + s3.SUPP_FILE.exts.join('、'), 'ERR_VALIDATION') };
+    if (!(size > 0 && size <= s3.SUPP_FILE.maxBytes)) return { fail: fail('檔案大小須在 50 MB 內', 'ERR_VALIDATION') };
+    return { name: nm, size: size, mime: s3.suppFileMime(nm) };
+  }
+  function suppUpChunk(up, req) {
+    var off = Number(req.offset) || 0, end = Number(req.end) || 0;
+    if (Number(req.total) !== up.size || end > up.size || end <= off) return fail('分塊範圍不正確', 'ERR_VALIDATION');
+    if (off !== up.received) { if (end <= up.received) return ok({ received: up.received, done: up.received === up.size, duplicate: true }); return fail('分塊順序錯誤（預期 ' + up.received + '）', 'ERR_CHUNK_ORDER', String(up.received)); }
+    if (b64Bytes(req.data) !== end - off) return fail('分塊長度不符', 'ERR_VALIDATION');
+    up.chunks.push(String(req.data || '')); up.received = end;
+    return ok({ received: up.received, done: up.received === up.size });
+  }
+  function suppRetTarget(db, req, au, cred) {
+    var sub = db.submissions[String(req.receiptId || '')];
+    if (!sub || progressKeyOf(sub.index.account) !== au.key) return { fail: fail('找不到該份作業', 'ERR_NOT_FOUND') };
+    if (au.viaLink && cred && (String(cred.receiptId) !== String(req.receiptId) || String(cred.requestId) !== String(req.requestId))) return { fail: fail('找不到該補件需求', 'ERR_NOT_FOUND') };
+    var x = suppItemOf(db, req.receiptId, req.requestId, req.itemId);
+    if (!x.it) return { fail: fail('找不到該補件項目', 'ERR_NOT_FOUND') };
+    if (!x.it.file || !x.it.file.ret) return { fail: fail('此項目不需要回傳檔案', 'ERR_VALIDATION') };
+    if (x.it.ret && x.it.ret.review === 'pass') return { fail: fail('此項回傳檔已審核通過，不需要再上傳', 'ERR_SUPP_REVIEWED') };
+    x.sub = sub; return x;
+  }
   /** 前台補件憑證：帳號＋lookupToken（同 clientKey）或連結 k */
   function suppAuth(db, req) {
     var ck = clientKeyOf(req); if (!ck) return { fail: fail('缺少識別碼', 'ERR_VALIDATION') };
@@ -532,7 +574,7 @@
   }
 
   /* ---------------- 3.1：追蹤名單、名冊發送、回覆確認、通知圖卡、額度、自動追蹤、軟刪除（與 gas/watch.gs 同規則） ---------------- */
-  var WATCH = { ID: 'watch', TITLE: '官方關注名單', MAX_MEMBERS: 500, MAX_NOTE: 200, MAX_NOTIFY_KEEP: 10, UNDO_TTL_MS: 10 * 60 * 1000, NOTICE_MAX: 30, NOTICE_MAX_BYTES: 3 * 1024 * 1024, QUOTA_LOW_COUNT: 20, QUOTA_WARN_RATIO: 0.2,
+  var WATCH = { ID: 'watch', TITLE: '官方關注名單', MAX_MEMBERS: 500, MAX_NOTE: 200, MAX_NOTIFY_KEEP: 10, UNDO_TTL_MS: 10 * 60 * 1000, NOTICE_MAX: 30, NOTICE_MAX_BYTES: 3 * 1024 * 1024, QUOTA_WARN_RATIO: 0.2,
     ACK_RE: /^(?![\s\S]*(?:不確認|未確認|沒確認|沒有確認|無法確認|待確認|請確認|請你確認|煩請確認|麻煩確認|能否確認|是否確認|要確認|確認一下|確認看看|確認嗎|確認吧))[\s\S]*確認/ };
   function ensure31(db) {
     if (!db.watch) db.watch = { order: [], entries: {} };
@@ -670,16 +712,28 @@
   function quotaKey() { var t = tpeDate(new Date()); return t.date.slice(0, 4) + t.date.slice(5, 7); }
   function quotaMonth(db) { ensure31(db); var o = db.quota[quotaKey()]; if (!o) o = db.quota[quotaKey()] = { total: 0, byKind: {}, days: {} }; return o; }
   function quotaAccount(db, kind, n, extra) { var o = quotaMonth(db); n = Math.max(0, Number(n) || 0); o.byKind[kind] = (o.byKind[kind] || 0) + n + (Number(extra) || 0); o.total += n; var day = tpeDate(new Date()).date.slice(8, 10); o.days[day] = (o.days[day] || 0) + n; }
-  function lineQuotaNow(db) { return { type: 'limited', limit: db.line.limit, used: db.line.used, remaining: Math.max(0, db.line.limit - db.line.used) }; }
+  /** 3.3.7 書籤版本狀態（同 gas bookmarkletStatus） */
+  function bmStatusMock(db) {
+    var s = S(), last = db.bmLast || {}, out = {}, old = [];
+    ['roster', 'orders', 'linemap'].forEach(function (k) { var x = last[k]; if (!x) return; var c = s.bookmarkletCheck(x.version); out[k] = { version: c.version, label: c.label, at: x.at || '', role: x.role || '', roleLabel: x.role === 'assistant' ? '助教' : x.role === 'principal' ? '校長' : '', outdated: c.outdated }; if (c.outdated) old.push(k); });
+    return { latest: s.BOOKMARKLET.version, kinds: s.BOOKMARKLET.kinds, last: out, outdated: old };
+  }
+  /** 3.3.7 額度依方案（同資料中心 schema.lineQuotaEval）：db.line.type 'limited'|'none'、db.line.limit；設定 db.quotaCfg */
+  function quotaCfgOf(db) { return S().lineQuotaCfg(db.quotaCfg || null); }
+  function lineQuotaNow(db) { var c = quotaCfgOf(db); return S().lineQuotaEval({ type: db.line.type || 'limited', value: db.line.limit, used: db.line.used }, { reserveRatio: c.reserveRatio, overage: c.mainOverage }); }
+  function lineQuotaUnknownMock(db) { var c = quotaCfgOf(db), q = S().lineQuotaEval({ type: 'limited', value: c.mainLimit, used: 0 }, { reserveRatio: c.reserveRatio, overage: c.mainOverage, estimated: true }); q.unknown = true; return q; }
+  function quotaGuardMock(q, n) { var c = S().lineQuotaSend(q, n); if (!c.enough) throw err('本月 LINE 剩餘則數 ' + q.remaining + ' 則，不足以發送 ' + n + ' 則（差 ' + c.shortBy + ' 則）', 'ERR_LINE_QUOTA', String(c.shortBy)); return c; }
+  function quotaCfgPublicMock(db) { var c = quotaCfgOf(db); return { mainLimit: c.mainLimit, adminLimit: c.adminLimit, reservePct: Math.round(c.reserveRatio * 1000) / 10, mainOverage: c.mainOverage, lastMain: db.line.settings ? { type: db.line.type || 'limited', limit: (db.line.type === 'none' ? null : db.line.limit) } : null, lastAdmin: null }; }
   function lineQuotaStatusData(db) {
     var s = S(), now = new Date(), t = tpeDate(now), y = Number(t.date.slice(0, 4)), m = Number(t.date.slice(5, 7)), d = Number(t.date.slice(8, 10));
     var daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate(), ny = m === 12 ? y + 1 : y, nm = m === 12 ? 1 : m + 1;
-    var acc = quotaMonth(db), configured = lineConfigured(db), q = configured ? lineQuotaNow(db) : { limit: s.LINE.monthlyQuota, used: acc.total, remaining: Math.max(0, s.LINE.monthlyQuota - acc.total) };
-    var remaining = Math.max(0, q.limit - q.used), level = remaining < WATCH.QUOTA_LOW_COUNT ? 'low' : (remaining < q.limit * WATCH.QUOTA_WARN_RATIO ? 'warn' : 'ok');
+    var acc = quotaMonth(db), configured = lineConfigured(db), c = quotaCfgOf(db);
+    var q = configured ? lineQuotaNow(db) : S().lineQuotaEval({ type: 'limited', value: c.mainLimit, used: acc.total }, { reserveRatio: c.reserveRatio, overage: c.mainOverage, estimated: true });
+    var remaining = q.remaining, level = q.level;
     var byKind = { notify: 0, remind: 0, resend: 0, digest: 0, auto: 0, ack: 0, supplement: 0, batch: 0 };
     Object.keys(acc.byKind).forEach(function (k) { byKind[k] = (byKind[k] || 0) + acc.byKind[k]; });
     var forecast = Math.round(q.used / Math.max(1, d) * daysInMonth);
-    return { configured: configured, used: q.used, limit: q.limit, remaining: remaining, resetDate: ny + '.' + pad2(nm) + '.01', level: level, byKind: byKind, accounted: acc.total, forecastEnd: forecast, forecastExceeds: forecast > q.limit, paused: remaining < WATCH.QUOTA_LOW_COUNT, dayOfMonth: d, daysInMonth: daysInMonth, checkedAt: tpeStamp(now), cached: false, estimated: !configured };
+    return { configured: configured, type: q.type, used: q.used, limit: q.limit, remaining: remaining, unlimited: !!q.unlimited, overage: !!q.overage, over: !!q.over, overBy: q.overBy || 0, overageNote: q.over && q.overage ? s.LINE.overageNote : '', reserve: q.reserve, reservePct: Math.round(c.reserveRatio * 1000) / 10, cfg: quotaCfgPublicMock(db), resetDate: ny + '.' + pad2(nm) + '.01', level: level, byKind: byKind, accounted: acc.total, forecastEnd: forecast, forecastExceeds: q.limit != null && forecast > q.limit, paused: !!q.paused, dayOfMonth: d, daysInMonth: daysInMonth, checkedAt: tpeStamp(now), cached: false, estimated: !configured };
   }
   /** 逐人推播（文字＋圖卡同一則）：msgs=[{ key, name, text, deadline }]；回 { sent, failed, records, usedNow } */
   function pushMessages31(db, msgs, seed, imageUrl) {
@@ -707,7 +761,7 @@
     if (req.imageId && !image) throw err('找不到該通知圖卡', 'ERR_NOT_FOUND');
     var imgById = {};
     members.forEach(function (m) { if (m.imageId && !imgById[m.imageId]) { var im = noticeImageById(db, m.imageId); if (!im) throw err('找不到該通知圖卡', 'ERR_NOT_FOUND'); imgById[m.imageId] = im; } });
-    var configured = lineConfigured(db), quota = configured ? lineQuotaNow(db) : { type: 'limited', limit: s.LINE.monthlyQuota, used: 0, remaining: s.LINE.monthlyQuota, unknown: true };
+    var configured = lineConfigured(db), quota = configured ? lineQuotaNow(db) : lineQuotaUnknownMock(db);
     var messages = [], skipped = [];
     members.forEach(function (m) {
       var r = rosterByHash(db, m.key), w = watchLoad(db, m.key);
@@ -724,14 +778,14 @@
       else if (lb.blocked) skipped.push({ key: m.key, name: name, reason: '已封鎖官方帳號' });
       else if (row.tooLong) skipped.push({ key: m.key, name: name, reason: '訊息過長' });
     });
-    var toSend = messages.filter(function (m) { return m.willSend; }), willSend = toSend.length, after = quota.remaining - willSend;
+    var toSend = messages.filter(function (m) { return m.willSend; }), willSend = toSend.length, qs = s.lineQuotaSend(quota, willSend);
     var title = t ? (over.trim() ? t.name + '（本次修改）' : t.name) : '自訂內容';
     var imgOut = image ? { id: image.id, name: image.name, kind: image.kind || '', url: image.url } : null, kind = req.kind === 'resend' ? 'resend' : 'notify';
     var perImg = Object.keys(imgById).length, anyImg = !!image || perImg > 0;
     if (!imgOut && perImg) imgOut = { id: '', name: '個人化圖卡', kind: 'personal', url: '', count: perImg };
-    var out = { template: t ? { id: t.id, name: t.name } : null, title: title, image: imgOut, quota: quota, messages: messages, willSend: willSend, skipped: skipped, afterRemaining: Math.max(0, after), enough: after >= 0, shortBy: after < 0 ? -after : 0, lineConfigured: configured, pausedReminders: quota.remaining < WATCH.QUOTA_LOW_COUNT };
+    var out = { template: t ? { id: t.id, name: t.name } : null, title: title, image: imgOut, quota: quota, messages: messages, willSend: willSend, skipped: skipped, afterRemaining: qs.afterRemaining, enough: qs.enough, shortBy: qs.shortBy, overage: qs.overage, overageNote: qs.note, lineConfigured: configured, pausedReminders: !!quota.paused };
     if (req.preview === true || req.dryRun === true) { out.preview = true; return out; }
-    if (willSend && after < 0) throw err('本月 LINE 剩餘 ' + quota.remaining + ' 則，不足以發送 ' + willSend + ' 則（差 ' + (-after) + ' 則）', 'ERR_LINE_QUOTA', String(-after));
+    if (willSend && !qs.enough) throw err('本月 LINE 剩餘 ' + quota.remaining + ' 則，不足以發送 ' + willSend + ' 則（差 ' + qs.shortBy + ' 則）', 'ERR_LINE_QUOTA', String(qs.shortBy));
     var nowStr = tpeStamp(new Date()), added = [], updated = [];
     messages.forEach(function (m) { var existed = !!watchLoad(db, m.key); if (existed && kind !== 'resend' && S().CYCLE_RESTART) wCycleRestart(db, m.key, nowStr); watchUpsert(db, m.key, { deadline: m.deadline, callName: m.callName, by: 'notify', name: m.name, masked: m.masked }, nowStr); (existed ? updated : added).push(m.key); });
     var runId = String(req.runId || '').trim().slice(0, 40) || tpeStamp(new Date()).slice(0, 13).replace(/[. :]/g, ''), bodyHash = keyHash(body + '|' + (image ? image.id : '')).slice(0, 8);
@@ -784,7 +838,7 @@
     var A = S().AUTOMATION, R = S().REPORT, db = loadDb(), modes = {};
     R.kinds.forEach(function (k) { modes[k] = reportModeOf(cfg, k); });
     return { enabled: cfg.enabled, texts: cfg.texts, defaults: A.texts, labels: A.labels, kinds: A.kinds, audience: A.audience, vars: A.vars,
-      adminRecipients: cfg.adminRecipients.map(function (r) { return recipPublic(db, r); }), digestHour: cfg.digestHour, updatedAt: cfg.updatedAt || '', quotaLow: WATCH.QUOTA_LOW_COUNT, triggerReady: true, reportMode: modes,
+      adminRecipients: cfg.adminRecipients.map(function (r) { return recipPublic(db, r); }), digestHour: cfg.digestHour, updatedAt: cfg.updatedAt || '', quotaReservePct: Math.round(quotaCfgOf(db).reserveRatio * 1000) / 10, triggerReady: true, reportMode: modes,
       reportKinds: R.kinds, reportLabels: R.labels, roles: R.roles, roleLabels: R.roleLabels, adminLine: { configured: adminLineConfigured(db) } };
   }
 
@@ -826,7 +880,7 @@
     var h = keyHash(progressKeyOf(account));
     if (cfg.enabled.thanks && mainOk) {
       var lb = lineBindingOf(db, h), q = lineQuotaNow(db);
-      if (lb.bound && !lb.blocked && q.remaining >= WATCH.QUOTA_LOW_COUNT) {
+      if (lb.bound && !lb.blocked && !q.paused) {
         var e = watchLoad(db, h), cn = (e && e.c) || s.callName(name), rk = 'thanks.' + receiptId;
         if (!db.line.retryKeys[rk]) { var thx = s.renderTemplate(cfg.texts.thanks, s.automationVars({ callName: cn, deadline: (watchLoad(db, h) || {}).d || '' })); db.line.retryKeys[rk] = 1; db.line.used++; db.line.pushed.push({ to: db.line.bindings[h].userId, text: thx, retryKey: rk, at: tpeStamp(new Date()) }); quotaAccount(db, 'auto', 1); chatLogAppend(db, [{ key: h, dir: 'out', kind: 'thanks', text: thx, ok: true }]); }
         out.thanks = true;
@@ -841,9 +895,9 @@
     var s = S(), cfg = automationLoad(db), nowMs = Date.now(), now = new Date(nowMs), t = tpeDate(now);
     var report = { at: tpeStamp(now), remind48: [], remind24: [], noAck: [], overdue: [], held: [], digest: null, paused: false, skipped: [], dry: !!opts.dry, configured: lineConfigured(db) };
     if (!report.configured) { report.skipped.push('LINE 尚未設定'); return report; }
-    var quota = lineQuotaNow(db); report.quota = { used: quota.used, limit: quota.limit, remaining: quota.remaining }; report.paused = quota.remaining < WATCH.QUOTA_LOW_COUNT;
+    var quota = lineQuotaNow(db); report.quota = { used: quota.used, limit: quota.limit, remaining: quota.remaining, reserve: quota.reserve, unlimited: !!quota.unlimited }; report.paused = !!quota.paused;
     var idx = stateIndexes(db), rows = watchAll(db).map(function (e) { return { e: e, row: watchRowOut(db, e, nowMs, idx) }; });
-    var budget = quota.remaining - WATCH.QUOTA_LOW_COUNT;
+    var budget = quota.budget == null ? Infinity : quota.budget;   // 3.3.7 剩餘 − 保留（比例）
     var pushSister = function (x, kind, text) {
       if (report.paused || budget <= 0) { report.skipped.push(kind + '：額度不足，' + x.row.name); return false; }
       if (!x.row.lineBound || x.row.lineBlocked) { report.skipped.push(kind + '：LINE 無法送達，' + x.row.name); return false; }
@@ -1045,7 +1099,7 @@
         hw: { state: st.state, percent: st.percent, receiptId: st.receiptId, submittedAt: st.submittedAt, supp: (function (ix) { var t = String((ix && ix.status) || ''); return st.state === 'submitted' && !!ix && ix.receiptId === st.receiptId && /補件/.test(t) && t !== '已補件'; })(idx.byIdx[h]) },   // 3.3.5 同 prep.gs prepSuppOpen_
         dataConfirmed: e ? e.dc === 1 : p.dc === 1, toolDone: e ? e.td === 1 : p.td === 1,
         drive: { registered: !!drv, rootFolderId: drv ? drv.rootFolderId : '', rootUrl: drv ? drv.rootUrl : '' },
-        material: mf ? { flowId: mf.flowId, state: mf.state, stateLabel: s.materialStateLabel(mf.state), matchPending: !!mf.matchPending, cycle: mf.cycle || '', notifiedAt: mf.notifiedAt || '', deliveredAt: mf.deliveredAt || '', amount: Number(mf.amount) || 0, matchIssue: mf.matchIssue || '' } : null,
+        material: mf ? { flowId: mf.flowId, state: mf.state, stateLabel: s.materialStateLabel(mf.state), matchPending: !!mf.matchPending, cycle: mf.cycle || '', notifiedAt: mf.notifiedAt || '', deliveredAt: mf.deliveredAt || '', amount: Number(mf.amount) || 0, matchIssue: mf.matchIssue || '', abandoned: !!mf.abandonedAt, closed: !!mf.closedAt } : null,
         lineBound: lb.bound, chatUrl: lb.bound ? lineChatUrlFor(db, h) : '', syncAt: c ? c.y || '' : '' };
     });
   }
@@ -1198,7 +1252,7 @@
     return { text: s.renderTemplate(cfg.texts.digest, vars), hash: hash };
   }
   function reportTextMock(db, kind, cfg) {
-    var s = S(), today = tpeDate(new Date()).date, paused = Math.max(0, db.line.limit - db.line.used) < WATCH.QUOTA_LOW_COUNT;
+    var s = S(), today = tpeDate(new Date()).date, paused = !!lineQuotaNow(db).paused;
     cfg = cfg || automationLoad(db);
     if (kind === 'principal') { var t = s.reportPrincipalText(prepBoardMock(db, {}), today, Date.now()); return { text: t, hash: keyHash(t.replace(today, '')) }; }
     if (kind === 'digest') return digestVarsMock(db, cfg, paused);
@@ -1574,7 +1628,7 @@
     if (F && !F.validate(msgs).ok) return fail('卡片產生失敗', 'ERR_SETUP');
     var lb = r.key ? lineBindingOf(db, r.key) : { bound: false, blocked: false }, to = r.key && lb.bound ? db.line.bindings[r.key].userId : r.userId;
     var reason = !/^U[0-9a-f]{32}$/.test(String(to || '')) ? '未對應 LINE' : lb.bound && lb.blocked ? '已封鎖官方帳號' : '', q = reason ? null : lineQuotaNow(db);
-    if (q && q.remaining < 1) return fail('本月 LINE 剩餘則數不足 1 則', 'ERR_LINE_QUOTA');
+    if (q && !s.lineQuotaSend(q, 1).enough) return fail('本月 LINE 剩餘則數不足 1 則', 'ERR_LINE_QUOTA');
     if (req.dryRun) return ok({ dryRun: true, messages: msgs, quota: q, canSend: !reason, reason: reason });
     var now = tpeStamp(new Date()), scope = '';
     if (add) {
@@ -1622,7 +1676,7 @@
         var rD = rosterByHash(db, hD) || {}, cnD = eD.c || s.callName(rD.name || eD.n || ''), lbD = lineBindingOf(db, hD), qD = lineQuotaNow(db), boundD = lbD.bound && !lbD.blocked;
         var bodyD = req.text != null && String(req.text).trim() ? String(req.text).slice(0, s.REMIND_MANUAL.maxLength) : s.remindManualText(db.remindText || '');
         var txD = s.renderTemplate(bodyD, s.remindManualVars({ callName: cnD, deadline: eD.d, percent: stD.percent || 0 }));
-        var whyD = !lineConfigured(db) ? 'LINE 尚未設定' : !boundD ? (lbD.bound ? 'LINE 無法送達' : '尚未對應 LINE') : qD.remaining < 1 ? '本月 LINE 額度不足' : '';
+        var whyD = !lineConfigured(db) ? 'LINE 尚未設定' : !boundD ? (lbD.bound ? 'LINE 無法送達' : '尚未對應 LINE') : !S().lineQuotaSend(qD, 1).enough ? '本月 LINE 額度不足' : '';
         if (req.preview === true) return ok({ preview: true, name: rD.name || eD.n || '', callName: cnD, deadline: eD.d, deadlineText: s.formatDeadline(eD.d), percent: stD.percent || 0, state: stD.state, text: txD, lineBound: boundD, canPush: !whyD, reason: whyD, chatUrl: lbD.bound ? lineChatUrlFor(db, hD) : '', quota: qD });
         var atD = tpeStamp(new Date());
         if (whyD) return ok({ ok: false, error: whyD, code: 0, at: atD, text: txD, manual: true });
@@ -1802,6 +1856,14 @@
         if (req.action === 'drive_folder_summary') return ok({ registered: true, folderId: rec.rootFolderId, rootUrl: rec.rootUrl, rootName: rec.rootName || '', files: files.length, bytes: bytes, googleDocs: 1, truncated: false, checkedAt: tpeStamp(new Date()) });
         return ok({ folderId: rec.rootFolderId, rootName: rec.rootName || '', files: files, total: files.length, bytes: bytes, truncated: false });
       }
+      case 'drive_zip': {   // 3.3.7 離線示範：第一次呼叫產生中，第二次備妥（連結為示範檔）
+        var hZ = keyOfReq(req); if (!/^[0-9a-f]{16}$/.test(hZ)) return fail('學姐鍵格式不正確', 'ERR_VALIDATION');
+        var recZ = db.drive[hZ]; if (!recZ) return fail('學姐尚未登錄雲端資料夾', 'ERR_NOT_FOUND');
+        db.zip = db.zip || {}; var zs = db.zip[hZ];
+        if (!zs || req.force === true) { db.zip[hZ] = { n: 1 }; saveDb(); return ok({ ready: false, building: true, done: 0, total: 1, stale: true, shared: false, parts: [], large: [], files: 3, bytes: 1500000 }); }
+        zs.n++; zs.at = tpeStamp(new Date()); saveDb();
+        return ok({ ready: true, building: false, stale: false, shared: true, sharedUntil: tpeStamp(new Date(Date.now() + 86400000)), builtAt: zs.at, files: 3, bytes: 1500000, parts: [{ url: 'https://drive.google.com/uc?export=download&confirm=t&id=demo' + hZ.slice(0, 6), name: (recZ.rootName || '示範_諮詢資料') + '_' + zs.at.slice(0, 10) + '.zip', size: 1500000, files: 3 }], large: [] });
+      }
       case 'material_lib_list': return ok({ rows: db.matLib.slice(), products: s.normalizeMatProducts(db.matProducts) });
       case 'material_products_save': {
         var PP = s.MAT_PRODUCTS;
@@ -1854,10 +1916,11 @@
           var body = String(req.text || '').trim() ? String(req.text) : M.texts.order;
           var pcN = s.normalizeMatProducts(db.matProducts), text = s.renderTemplate(body, s.materialVars({ callName: pub.callName, material: draft.material, amount: draft.amount, deadline: draft.deadline, product: pcN.displayName, orderUrl: pcN.orderUrl }));
           var q = lineQuotaNow(db), lb = lineBindingOf(db, fN.rosterKey), can = lineConfigured(db) && lb.bound && !lb.blocked;
-          if (req.preview === true) return ok({ preview: true, text: text, imageUrl: img ? img.url : '', willSend: can ? 1 : 0, quota: q, afterRemaining: Math.max(0, q.remaining - (can ? 1 : 0)), lineBound: can });
+          var qsN = s.lineQuotaSend(q, can ? 1 : 0);
+          if (req.preview === true) return ok({ preview: true, text: text, imageUrl: img ? img.url : '', willSend: can ? 1 : 0, quota: q, afterRemaining: qsN.afterRemaining, overage: qsN.overage, overageNote: qsN.note, lineBound: can });
           if (!lineConfigured(db)) return fail('尚未設定 LINE 官方帳號（Channel ID 與 Channel secret）', 'ERR_LINE_NOT_CONFIGURED');
           if (!can) return fail('學姐尚未對應 LINE 或無法送達，可改用手動發送後標記', 'ERR_VALIDATION');
-          if (q.remaining < 1) return fail('本月 LINE 剩餘 0 則', 'ERR_LINE_QUOTA', '1');
+          if (!s.lineQuotaSend(q, 1).enough) return fail('本月 LINE 剩餘 0 則', 'ERR_LINE_QUOTA', '1');
           var msgs = []; if (img) msgs.push({ type: 'image', originalContentUrl: img.url, previewImageUrl: img.url }); msgs.push({ type: 'text', text: text });
           var r = pushRaw(db, 'main', db.line.bindings[fN.rosterKey].userId, msgs, 'mat.order.' + fN.flowId + '.' + keyHash(text + (img ? img.id : '')));
           if (!r.ok) return fail(r.error, 'ERR_LINE_API');
@@ -2245,6 +2308,8 @@
     return null;
   }
 
+  /** 3.5.1 示範權限名單（未設定＝校長 b0970111728@gmail.com、助教 grace63188@gmail.com） */
+  function mockAdminUsers(db) { return Array.isArray(db.adminUsers) && db.adminUsers.length ? db.adminUsers : [{ email: 'b0970111728@gmail.com', role: 'principal', name: '校長' }, { email: 'grace63188@gmail.com', role: 'assistant', name: '助教' }]; }
   function requireToken(req) {
     var db = loadDb();
     var t = db.tokens[req.token];
@@ -2520,6 +2585,7 @@
           (Array.isArray(req.items) ? req.items : []).forEach(function (x) {
             if (errS) return;
             var it = rS.items.filter(function (y) { return y.id === String(x && x.id); })[0]; if (!it) return;
+            if (it.file && it.file.ret) return;   // 3.3.8 需要回傳檔案的項目只以回傳完成
             var c = s3s.normalizeSupplementContent(x.content); if (!c) return;
             if (c.kind === 'drive' && c.folderId) it.folderId = c.folderId;
             if (c.kind === 'section') {
@@ -2563,6 +2629,73 @@
           return ok({ request: supplementPublic(rS), status: finS ? 'done' : stSub, statusLabel: finS ? s3s.SUPPLEMENT.statuses.done : s3s.SUPPLEMENT.statuses[stSub], finished: finS, driveRefreshed: drvS });
         }
 
+        case 'supp_file_dl': {   // 3.3.8 學姐下載附檔（簽章）
+          var pF = S3().suppDlParse(req.t); if (!pF || suppFileSig('sfdl', pF.rid, pF.sid, pF.iid) !== pF.sig) return fail('連結無效', 'ERR_NOT_FOUND');
+          var xF = suppItemOf(db, pF.rid, pF.sid, pF.iid); if (!xF.it || !xF.it.file) return fail('此項目沒有附檔', 'ERR_NOT_FOUND');
+          if (xF.it.file.kind === 'url') return ok({ url: xF.it.file.url, name: xF.it.file.name, kind: 'url' });
+          if (!xF.it.file.dlAt) xF.it.file.dlAt = tpeStamp(new Date()); xF.it.file.dlN = (Number(xF.it.file.dlN) || 0) + 1; saveDb();
+          return ok({ url: suppDlUrlMock(xF.it.file.id), name: xF.it.file.name, kind: 'drive' });
+        }
+        case 'supp_return_dl': {   // 3.3.8 後台下載回傳檔（簽章或 token）
+          var xR;
+          if (req.t) { var pR = S3().suppDlParse(req.t); if (!pR || suppFileSig('srdl', pR.rid, pR.sid, pR.iid) !== pR.sig) return fail('連結無效', 'ERR_NOT_FOUND'); xR = suppItemOf(db, pR.rid, pR.sid, pR.iid); }
+          else { try { requireToken(req); } catch (e) { return fail(e.message, e.code); } xR = suppItemOf(db, req.receiptId, req.requestId, req.itemId); }
+          if (!xR.it) return fail('找不到該補件項目', 'ERR_NOT_FOUND');
+          if (!xR.it.ret || !xR.it.ret.id) return fail('學姐尚未回傳檔案', 'ERR_NOT_FOUND');
+          mem.suppShared = mem.suppShared || {}; mem.suppShared[xR.it.ret.id] = Date.now() + 24 * 3600000;
+          return ok({ url: suppDlUrlMock(xR.it.ret.id), name: xR.it.ret.name, size: xR.it.ret.size || 0, sharedUntil: tpeStamp(new Date(Date.now() + 24 * 3600000)) });
+        }
+        case 'supplement_return_begin': {   // 3.3.8 學姐回傳補件檔
+          var auB = suppAuth(db, req); if (auB.fail) return auB.fail;
+          var xB = suppRetTarget(db, req, auB, req); if (xB.fail) return xB.fail;
+          var cB = suppUpCheck(req); if (cB.fail) return cB.fail;
+          var nmRB = S3().suppFileName(String(xB.it.title || '補件') + '_' + String(xB.sub.index.name || '')).slice(0, 100) + '.' + S3().suppFileExt(cB.name);
+          var upB = 'sr' + rand(16); mem.suppUploads = mem.suppUploads || {};
+          mem.suppUploads[upB] = { rid: String(req.receiptId), sid: String(req.requestId), iid: String(req.itemId), ck: clientKeyOf(req), name: nmRB, size: cB.size, mime: cB.mime, chunks: [], received: 0 };
+          return ok({ uploadId: upB, chunkBytes: S3().SUPP_FILE.chunkBytes, name: nmRB });
+        }
+        case 'supplement_return_chunk': {
+          var upC = (mem.suppUploads || {})[String(req.uploadId || '')]; if (!upC || upC.ck !== clientKeyOf(req)) return fail('上傳已失效，請重新上傳', 'ERR_NOT_FOUND');
+          return suppUpChunk(upC, req);
+        }
+        case 'supplement_return_finish': {
+          var auE = suppAuth(db, req); if (auE.fail) return auE.fail;
+          var upE = (mem.suppUploads || {})[String(req.uploadId || '')]; if (!upE || upE.ck !== clientKeyOf(req)) return fail('上傳已失效，請重新上傳', 'ERR_NOT_FOUND');
+          if (upE.received !== upE.size) return fail('檔案尚未上傳完成', 'ERR_INCOMPLETE');
+          var xE = suppRetTarget(db, { receiptId: upE.rid, requestId: upE.sid, itemId: upE.iid }, auE, req); if (xE.fail) return xE.fail;
+          var s3E = S3(), nowE = tpeStamp(new Date()), itE = xE.it, rE = xE.r, oldE = itE.ret || null, fidE = 'mocksr_' + rand(12);
+          mem.suppFiles = mem.suppFiles || {}; mem.suppFiles[fidE] = { b64: joinChunksB64(upE.chunks), mime: upE.mime, name: upE.name };
+          var dlE = s.parseDeadline(s3E.suppFileDeadline(itE.file));
+          itE.ret = { id: fidE, name: upE.name, size: upE.size, mime: upE.mime, at: nowE, n: (oldE && Number(oldE.n) || 0) + 1, review: 'pending' };
+          if (dlE != null && Date.now() > dlE) itE.ret.late = true;
+          if (oldE && oldE.reason) itE.ret.prevReason = oldE.reason;
+          if (oldE && oldE.id) { delete mem.suppFiles[oldE.id]; mem.suppTrashed = (mem.suppTrashed || []).concat([oldE.id]); }
+          itE.status = 'done'; itE.doneAt = nowE; itE.content = { kind: 'file', name: upE.name, size: upE.size };
+          var stE = s3E.supplementStatus(rE.items), finE = stE === 'done' && !rE.finishedAt;
+          if (finE) { rE.finishedAt = nowE; xE.sub.index.status = s3E.STATUS_SUPPLEMENT.done; xE.sub.pdf = 'pending'; }
+          xE.sub.data.supplements = db.supplements[upE.rid].map(supplementPublic);
+          delete mem.suppUploads[req.uploadId]; saveDb();
+          return ok({ request: supplementPublic(rE), status: stE, finished: stE === 'done', replaced: !!(oldE && oldE.id) });
+        }
+
+        /* 3.5.1 Email 驗證碼登入（示範：名單內任一 Email 的驗證碼固定 123456；名單＝db.adminUsers 或預設兩位） */
+        case 'login_code_send': {
+          var emS = String(req.email || '').trim().toLowerCase(), uS = mockAdminUsers(db).filter(function (u) { return u.email === emS; })[0];
+          if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(emS)) return fail('請輸入正確的 Email', 'ERR_VALIDATION');
+          if (!uS) return fail('此 Email 未在後台權限名單', 'ERR_FORBIDDEN');
+          mem.otp = mem.otp || {}; mem.otp[emS] = { code: '123456', exp: Date.now() + 600000 };
+          return ok({ sent: true, expiresAt: mem.otp[emS].exp, remaining: 2, masked: emS.replace(/^(.{2})[^@]*(@.*)$/, '$1***$2'), demoCode: '123456' });
+        }
+        case 'login_code_verify': {
+          var emV = String(req.email || '').trim().toLowerCase(), uV = mockAdminUsers(db).filter(function (u) { return u.email === emV; })[0], oV = (mem.otp || {})[emV];
+          if (!uV) return fail('此 Email 未在後台權限名單', 'ERR_FORBIDDEN');
+          if (!oV || oV.exp < Date.now()) return fail('驗證碼已過期或尚未寄送，請重新寄送', 'ERR_OTP_EXPIRED');
+          if (String(req.code || '').replace(/\s+/g, '') !== oV.code) return fail('驗證碼不符，請再試一次', 'ERR_AUTH');
+          delete mem.otp[emV];
+          var rememberV = req.remember === true || req.remember === 'true' || req.remember === 1, tokenV = 'mock.' + rand(24), nowV = Date.now();
+          db.tokens[tokenV] = nowV + (rememberV ? TOKEN_TTL_REMEMBER : TOKEN_TTL); db.tokenUsers = db.tokenUsers || {}; db.tokenUsers[tokenV] = { email: uV.email, role: uV.role }; saveDb();
+          return ok({ token: tokenV, expiresAt: db.tokens[tokenV], remember: rememberV, email: uV.email, role: uV.role, name: uV.name || (uV.role === 'assistant' ? '助教' : '校長') });
+        }
         case 'login': {
           if (String(req.password || '') !== password()) return fail('密碼錯誤', 'ERR_AUTH');
           var remember = req.remember === true || req.remember === 'true' || req.remember === 1;
@@ -2575,10 +2708,23 @@
       }
       try { requireToken(req); } catch (e) { return fail(e.message, e.code); }
       pre32(req);
-      if (!/^(version_check|audit_list|bootstrap|watch_list|list|list_meta|get|report_list|report_preview|prep_board|student_summary|student_detail|material_list|material_lib_list|material_match_pending|material_file_get|line_conversation|chat_log|notify_log|template_list|roster_browse|roster_status|roster_search|automation_get|line_quota_status|progress_list|line_admin_settings_get|line_admin_recent_senders|line_recent_senders|drive_folder_summary|drive_folder_files|supplement_list|notice_image_list|line_settings_status|line_map_status|remind_text_get|student_history)$/.test(String(req.action))) { db.snapVer = db.snapVer || { e: rand(6), n: 0 }; db.snapVer.n++; }   // 3.2 寫入遞增版本號（同 gas snapBump）
+      if (!/^(version_check|audit_list|bootstrap|watch_list|list|list_meta|get|report_list|report_preview|prep_board|student_summary|student_detail|material_list|material_lib_list|material_match_pending|material_file_get|line_conversation|chat_log|notify_log|template_list|roster_browse|roster_status|roster_search|automation_get|line_quota_status|progress_list|line_admin_settings_get|line_admin_recent_senders|line_recent_senders|drive_folder_summary|drive_folder_files|supplement_list|notice_image_list|line_settings_status|line_map_status|bookmarklet_status|remind_text_get|student_history)$/.test(String(req.action))) { db.snapVer = db.snapVer || { e: rand(6), n: 0 }; db.snapVer.n++; }   // 3.2 寫入遞增版本號（同 gas snapBump）
       var r32 = handle32(db, req);   // 3.2 新增與改版 action
       if (r32) return r32;
       switch (req.action) {
+        case 'admin_users_get': { var meG = (db.tokenUsers || {})[req.token] || null; return ok({ users: mockAdminUsers(db).map(function (u) { return { email: u.email, role: u.role, roleLabel: u.role === 'assistant' ? '助教' : '校長', name: u.name || '', at: u.at || '' }; }), me: meG, roles: { principal: '校長', assistant: '助教' }, max: 50 }); }
+        case 'admin_users_save': {
+          var meU = (db.tokenUsers || {})[req.token] || null;
+          if (!meU) return fail('請以校長 Email 登入後再修改權限名單', 'ERR_FORBIDDEN');
+          if (meU.role !== 'principal') return fail('只有校長可以修改權限名單', 'ERR_FORBIDDEN');
+          var seenU = {}, outU = [];
+          (Array.isArray(req.users) ? req.users : []).forEach(function (u) { var e = String(u && u.email || '').trim().toLowerCase(); if (!e || seenU[e]) return; if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) throw Object.assign(new Error('Email 格式不正確：' + e), { code: 'ERR_VALIDATION' }); seenU[e] = 1; outU.push({ email: e, role: u.role === 'assistant' ? 'assistant' : 'principal', name: String(u.name || '').slice(0, 40), at: u.at || tpeStamp(new Date()) }); });
+          if (!outU.length) return fail('權限名單不可為空', 'ERR_VALIDATION');
+          if (!outU.some(function (u) { return u.role === 'principal'; })) return fail('名單至少要有一位校長', 'ERR_VALIDATION');
+          if (!seenU[meU.email]) return fail('不可把目前登入的 Email 移出名單', 'ERR_VALIDATION');
+          db.adminUsers = outU; saveDb();
+          return ok({ users: outU.map(function (u) { return { email: u.email, role: u.role, roleLabel: u.role === 'assistant' ? '助教' : '校長', name: u.name, at: u.at }; }), saved: outU.length });
+        }
         case 'roster_sync': {
           if (!Array.isArray(req.rows)) return fail('名冊格式錯誤', 'ERR_VALIDATION');
           if (req.rows.length > s.ROSTER.maxRows) return fail('名冊超過上限 ' + s.ROSTER.maxRows + ' 筆', 'ERR_VALIDATION');
@@ -2683,14 +2829,14 @@
         }
         case 'line_settings_status': {
           var st = db.line.settings;
-          return ok({ configured: lineConfigured(db), channelId: st ? st.channelId : s.LINE.channelId, secretTail: st ? st.channelSecret.slice(-4) : '', updatedAt: st ? st.updatedAt : '', oaId: s.LINE.oaId, monthlyQuota: s.LINE.monthlyQuota, chatAccountId: db.line.chatAccount || '',
-            quota: lineConfigured(db) ? { type: 'limited', limit: db.line.limit, used: db.line.used, remaining: Math.max(0, db.line.limit - db.line.used) } : null });
+          return ok({ configured: lineConfigured(db), channelId: st ? st.channelId : s.LINE.channelId, secretTail: st ? st.channelSecret.slice(-4) : '', updatedAt: st ? st.updatedAt : '', oaId: s.LINE.oaId, monthlyQuota: quotaCfgOf(db).mainLimit, quotaCfg: quotaCfgPublicMock(db), chatAccountId: db.line.chatAccount || '',
+            quota: lineConfigured(db) ? lineQuotaNow(db) : null });
         }
         case 'line_push': {
           if (!lineConfigured(db)) return fail('尚未設定 LINE 官方帳號（Channel ID 與 Channel secret）', 'ERR_LINE_NOT_CONFIGURED');
           var bq = db.batches[String(req.batchId || '')]; if (!bq) return fail('找不到該關注名單', 'ERR_NOT_FOUND');
           var tq = templateById(db, String(req.templateId || '')); if (!tq) return fail('找不到該範本', 'ERR_NOT_FOUND');
-          var quota = { type: 'limited', limit: db.line.limit, used: db.line.used, remaining: Math.max(0, db.line.limit - db.line.used) };
+          var quota = lineQuotaNow(db);
           var msgsQ = [], skippedQ = [];
           pickMembers(bq, req.keys).forEach(function (m) {
             var lbq = lineBindingOf(db, m.key);
@@ -2702,14 +2848,14 @@
           var binfo = { id: bq.id, title: bq.title, deadline: bq.deadline, deadlineText: s.formatDeadline(bq.deadline) }, tinfo = { id: tq.id, name: tq.name };
           if (req.dryRun) return ok({ dryRun: true, batch: binfo, template: tinfo, quota: quota, toSend: msgsQ.length, messages: msgsQ, skipped: skippedQ });
           if (!msgsQ.length) return fail('沒有可推播的成員（皆未綁定 LINE）', 'ERR_VALIDATION');
-          if (quota.remaining < msgsQ.length) return fail('本月 LINE 剩餘則數 ' + quota.remaining + ' 則，不足以發送 ' + msgsQ.length + ' 則', 'ERR_LINE_QUOTA');
+          if (!s.lineQuotaSend(quota, msgsQ.length).enough) return fail('本月 LINE 剩餘則數 ' + quota.remaining + ' 則，不足以發送 ' + msgsQ.length + ' 則', 'ERR_LINE_QUOTA');
           var runId = String(req.runId || '').trim().slice(0, 40) || tpeStamp(new Date()).slice(0, 13).replace(/[. :]/g, '');
           var outQ = pushMessages(db, msgsQ, function (m) { return 'rk.' + bq.id + '.' + tq.id + '.' + m.key + '.' + runId; });
           bq.notify = bq.notify || {};
           outQ.records.forEach(function (r) { bq.notify[r.key] = { at: r.at, ok: r.ok, error: r.error }; });
           var logQ = notifyLogAppend(db, { source: 'batch', title: bq.title, template: tq.name, body: tq.body, sent: outQ.sent, failed: outQ.failed, skipped: skippedQ });
           saveDb();
-          return ok({ batch: binfo, template: tinfo, runId: runId, sent: outQ.sent, failed: outQ.failed, skipped: skippedQ, logId: logQ, quota: { type: 'limited', limit: db.line.limit, used: db.line.used, remaining: Math.max(0, db.line.limit - db.line.used) } });
+          return ok({ batch: binfo, template: tinfo, runId: runId, sent: outQ.sent, failed: outQ.failed, skipped: skippedQ, logId: logQ, quota: lineQuotaNow(db) });
         }
         case 'line_bind_manual': {
           var hM = String(req.key || '').toLowerCase();
@@ -2768,7 +2914,7 @@
           if (!lineConfigured(db)) return fail('尚未設定 LINE 官方帳號（Channel ID 與 Channel secret）', 'ERR_LINE_NOT_CONFIGURED');
           var reqN = req.action === 'line_push_direct' ? Object.assign({}, req, { bodyOverride: req.body, templateId: '' }) : req;
           var nN = notifyBuild(db, reqN); if (nN.error) return fail(nN.error, nN.code);
-          var quotaN = { type: 'limited', limit: db.line.limit, used: db.line.used, remaining: Math.max(0, db.line.limit - db.line.used) };
+          var quotaN = lineQuotaNow(db);
           var msgsN = [], skippedN = [];
           nN.recips.forEach(function (r) {
             if (!r.lineBound) { skippedN.push({ key: r.key, name: r.name, masked: r.masked, reason: '未對應 LINE' }); return; }
@@ -2778,13 +2924,13 @@
           var titleN = nN.template ? (nN.overridden ? nN.template.name + '（本次修改）' : nN.template.name) : '自訂內容';
           if (req.dryRun) return ok({ dryRun: true, template: nN.template, title: titleN, quota: quotaN, toSend: msgsN.length, messages: msgsN, skipped: skippedN });
           if (!msgsN.length) return fail('沒有可推播的收件人（皆未綁定 LINE）', 'ERR_VALIDATION');
-          if (quotaN.remaining < msgsN.length) return fail('本月 LINE 剩餘則數 ' + quotaN.remaining + ' 則，不足以發送 ' + msgsN.length + ' 則', 'ERR_LINE_QUOTA');
+          if (!s.lineQuotaSend(quotaN, msgsN.length).enough) return fail('本月 LINE 剩餘則數 ' + quotaN.remaining + ' 則，不足以發送 ' + msgsN.length + ' 則', 'ERR_LINE_QUOTA');
           var runN = String(req.runId || '').trim().slice(0, 40) || tpeStamp(new Date()).slice(0, 13).replace(/[. :]/g, '');
           var hashN = keyHash(nN.body).slice(0, 8);
           var outN = pushMessages(db, msgsN, function (m) { return 'notify.' + runN + '.' + hashN + '.' + m.key; });
           var logN = notifyLogAppend(db, { source: 'notify', title: '發送通知', template: titleN, body: nN.body, sent: outN.sent, failed: outN.failed, skipped: skippedN });
           saveDb();
-          return ok({ template: nN.template, title: titleN, runId: runN, sent: outN.sent, failed: outN.failed, skipped: skippedN, logId: logN, quota: { type: 'limited', limit: db.line.limit, used: db.line.used, remaining: Math.max(0, db.line.limit - db.line.used) } });
+          return ok({ template: nN.template, title: titleN, runId: runN, sent: outN.sent, failed: outN.failed, skipped: skippedN, logId: logN, quota: lineQuotaNow(db) });
         }
         case 'line_map_status': {
           var entS = rosterRows(db).filter(function (e) { return !(db.line.bindings[e.key] && db.line.bindings[e.key].userId); });
@@ -2886,6 +3032,25 @@
           return ok({ deleted: true, id: recDel.id, undoToken: uI2.token, undoExpiresAt: uI2.expiresAt });
         }
         case 'line_quota_status': return ok(lineQuotaStatusData(db));
+        case 'bookmarklet_status': return ok(bmStatusMock(db));   // 3.3.7 書籤版本
+        case 'bookmarklet_seen': {
+          var bk = ['roster', 'orders', 'linemap'].indexOf(String(req.kind)) >= 0 ? String(req.kind) : ''; if (!bk) return fail('書籤種類不正確', 'ERR_VALIDATION');
+          var bc = s.bookmarkletCheck(req.version), br = req.role === 'assistant' ? 'assistant' : req.role === 'principal' ? 'principal' : '';
+          db.bmLast = db.bmLast || {}; db.bmNotified = db.bmNotified || {};
+          db.bmLast[bk] = { version: bc.version, at: tpeStamp(new Date()), role: br };
+          var bn = 'v' + (bc.version || 'none'), bFirst = bc.outdated && !db.bmNotified[bn], bSent = false;
+          if (bFirst) { db.bmNotified[bn] = tpeStamp(new Date()); var bp = adminPush(db, '【書籤更新】\n◆ 偵測到舊版書籤\n・' + (s.BOOKMARKLET.kinds[bk] || '書籤') + '：' + bc.label + '\n・最新版本：v' + bc.latest, 'auto', 'bm.' + (bc.version || 'none'), ''); bSent = (bp && bp.sent) > 0; }
+          saveDb();
+          var bst = bmStatusMock(db); bst.check = bc; bst.notified = bSent; bst.alreadyNotified = bc.outdated && !bFirst;
+          return ok(bst);
+        }
+        case 'line_quota_cfg_set': {   // 3.3.7 額度設定（備援上限、保留比例）
+          if (req.reservePct != null && req.reservePct !== '' && !(Number(req.reservePct) >= 0 && Number(req.reservePct) <= 50)) return fail('保留比例須介於 0–50%', 'ERR_VALIDATION');
+          var cq = quotaCfgOf(db), pk = function (k) { return req[k] == null || req[k] === '' ? cq[k] : req[k]; };
+          db.quotaCfg = s.lineQuotaCfg({ mainLimit: pk('mainLimit'), adminLimit: pk('adminLimit'), reservePct: req.reservePct == null || req.reservePct === '' ? cq.reserveRatio * 100 : req.reservePct, mainOverage: req.mainOverage == null ? cq.mainOverage : req.mainOverage !== false });
+          saveDb();
+          return ok({ cfg: quotaCfgPublicMock(db) });
+        }
         case 'admin_remind_get': return ok(adminRemindMock(db));   // 3.2.12 內部提醒（與 gas/remind.gs 同形狀；清單為虛構示範資料）
         case 'admin_remind_save': {
           var RM = remindCore(); if (!req.settings || typeof req.settings !== 'object') return fail('缺少設定內容', 'ERR_VALIDATION');
@@ -2990,6 +3155,12 @@
           if (Array.isArray(req.recipients) && req.recipients.length) { var rcC = req.recipients.filter(function (x) { return x && x.receiptId === req.receiptId; })[0] || req.recipients[0]; if (rcC && rcC.imageId) imgIdC = String(rcC.imageId); }
           var imgC = imgIdC ? noticeImageById(db, imgIdC) : null;
           if (imgIdC && !imgC) return fail('找不到該通知圖卡', 'ERR_NOT_FOUND');
+          var fnC = s3c.normalizeSupplementFile(req.file, normC.items.length);   // 3.3.8 附檔（選填）
+          if (!fnC.ok) return fail(fnC.message, 'ERR_VALIDATION');
+          if (fnC.file) {
+            if (fnC.file.kind === 'drive' && (keyHash('sfup.' + fnC.file.id) !== String((req.file && req.file.ref) || '') || !(mem.suppFiles || {})[fnC.file.id])) return fail('附檔尚未上傳完成，請重新上傳', 'ERR_VALIDATION');
+            fnC.file.at = tpeStamp(new Date()); var itC = normC.items[fnC.file.item]; delete fnC.file.item; itC.file = fnC.file;
+          }
           var ridC = subC.index.receiptId, listC = db.supplements[ridC] = db.supplements[ridC] || [];
           if (listC.length >= s3c.SUPPLEMENT.maxRequestsPerReceipt) return fail('此作業的補件需求已達上限', 'ERR_VALIDATION');
           var sidC = 's' + tpeDate(new Date()).date.replace(/\./g, '') + '-' + rand(5);
@@ -3022,6 +3193,48 @@
           else Object.keys(db.supplements || {}).forEach(function (rid) { db.supplements[rid].forEach(function (r) { rowsL2.push(supplementPublic(r)); }); });
           rowsL2.sort(function (a, b) { return a.createdAt < b.createdAt ? 1 : -1; });
           return ok({ rows: rowsL2, total: rowsL2.length });
+        }
+        case 'supplement_file_begin': {   // 3.3.8 補件附檔上傳（後台）
+          if (!db.submissions[String(req.receiptId || '')]) return fail('找不到該份作業', 'ERR_NOT_FOUND');
+          var cU = suppUpCheck(req); if (cU.fail) return cU.fail;
+          var upU = 'sf' + rand(16); mem.suppUploads = mem.suppUploads || {};
+          mem.suppUploads[upU] = { admin: true, name: cU.name, size: cU.size, mime: cU.mime, chunks: [], received: 0 };
+          return ok({ uploadId: upU, chunkBytes: S3().SUPP_FILE.chunkBytes });
+        }
+        case 'supplement_file_chunk': {
+          var upK = (mem.suppUploads || {})[String(req.uploadId || '')]; if (!upK || !upK.admin) return fail('上傳已失效，請重新上傳', 'ERR_NOT_FOUND');
+          return suppUpChunk(upK, req);
+        }
+        case 'supplement_file_finish': {
+          var upN = (mem.suppUploads || {})[String(req.uploadId || '')]; if (!upN || !upN.admin) return fail('上傳已失效，請重新上傳', 'ERR_NOT_FOUND');
+          if (upN.received !== upN.size) return fail('檔案尚未上傳完成', 'ERR_INCOMPLETE');
+          var fidN = 'mocksf_' + rand(12); mem.suppFiles = mem.suppFiles || {}; mem.suppFiles[fidN] = { b64: joinChunksB64(upN.chunks), mime: upN.mime, name: upN.name };
+          delete mem.suppUploads[req.uploadId];
+          return ok({ file: { id: fidN, name: upN.name, size: upN.size, mime: upN.mime, ref: keyHash('sfup.' + fidN) } });
+        }
+        case 'supplement_review': {   // 3.3.8 審核學姐回傳檔
+          var s3V = S3(), resV = String(req.result || ''), rsV = String(req.reason == null ? '' : req.reason).trim();
+          if (resV !== 'pass' && resV !== 'reject') return fail('審核結果須為通過或退回', 'ERR_VALIDATION');
+          if (resV === 'reject' && !rsV) return fail('請填寫退回原因', 'ERR_VALIDATION');
+          if (rsV.length > s3V.SUPP_FILE.maxReasonLength) return fail('退回原因不可超過 ' + s3V.SUPP_FILE.maxReasonLength + ' 字', 'ERR_VALIDATION');
+          var subV = db.submissions[String(req.receiptId || '')]; if (!subV) return fail('找不到該份作業', 'ERR_NOT_FOUND');
+          var xV = suppItemOf(db, req.receiptId, req.requestId, req.itemId); if (!xV.it) return fail('找不到該補件項目', 'ERR_NOT_FOUND');
+          if (!xV.it.ret || !xV.it.ret.id) return fail('學姐尚未回傳檔案', 'ERR_NOT_FOUND');
+          if (xV.it.ret.review !== 'pending') return fail('此回傳檔已審核（' + (s3V.SUPP_FILE.reviews[xV.it.ret.review] || '') + '）', 'ERR_SUPP_REVIEWED');
+          var nowV = tpeStamp(new Date()), pushedV = null;
+          xV.it.ret.review = resV; xV.it.ret.reviewAt = nowV;
+          if (resV === 'reject') {
+            xV.it.ret.reason = rsV; xV.it.status = 'open'; xV.it.doneAt = ''; xV.r.finishedAt = ''; subV.index.status = s3V.STATUS_SUPPLEMENT.open;
+            var hV = keyHash(progressKeyOf(subV.index.account)), lbV = lineBindingOf(db, hV);
+            if (req.notify !== false && lineConfigured(db) && lbV.bound && !lbV.blocked) {
+              var cnV = s.callName(subV.index.name), txV = cnV + '學姐好，補件檔案「' + xV.it.title + '」需要修改後重新回傳。\n原因：' + rsV + '\n補件連結：' + xV.r.link;
+              var outV = pushMessages31(db, [{ key: hV, name: subV.index.name, callName: cnV, lineBound: true, text: txV, length: txV.length, tooLong: false }], function () { return 'supprej.' + req.receiptId + '.' + req.itemId + '.' + Date.now(); }, '');
+              pushedV = { sent: outV.sent.length, failed: outV.failed.length, skipped: 0, error: '' };
+            } else pushedV = { sent: 0, failed: 0, skipped: 1, error: lbV.bound ? '已封鎖官方帳號' : 'LINE 無法送達' };
+          } else delete xV.it.ret.reason;
+          subV.data.supplements = db.supplements[String(req.receiptId)].map(supplementPublic);
+          saveDb();
+          return ok({ request: supplementPublic(xV.r), pushed: pushedV });
         }
         case 'list_meta': {
           var mAcc = db.index.map(function (r) { return r.receiptId + ':' + r.fileCount + ':' + r.status; }).join('|');

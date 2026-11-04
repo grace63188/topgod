@@ -244,6 +244,8 @@
   /** 學姐所在階段（同 schema.orderStageOf）：make、test、price、order、wait、ready、log */
   function stageKey(row) {
     var t = infoOf(row), s = stateOf(row), m = row && row.material;
+    var S = schemaRef();
+    if (S) return S.orderStageOf({ state: s, cycle: t.cycle, createdAt: t.createdAt, priceConfirmed: Number(t.priceConfirmed) || 0 }, m);
     if (s === 'make' || s === 'fix') return 'make';
     if (s === 'test') return 'test';
     var cyc = String(t.cycle || ''), cur = m && m.state ? (m.cycle ? String(m.cycle) === cyc : (m.state !== 'delivered' || !t.createdAt || String(m.deliveredAt || '') >= String(t.createdAt))) : false;
@@ -251,6 +253,13 @@
     if (cur && m.state === 'ordered') return 'ready';
     if (cur && m.state === 'notified') return 'wait';
     return Number(t.priceConfirmed) > 0 ? 'order' : 'price';
+  }
+  /** 3.5.1 共用判定（schema.orderStageOf）：瀏覽器取 CONSULT_SCHEMA、Node 測試 require；取不到時沿用本地判定 */
+  function schemaRef() {
+    var g = typeof globalThis !== 'undefined' ? globalThis : (typeof window !== 'undefined' ? window : null);
+    if (g && g.CONSULT_SCHEMA && typeof g.CONSULT_SCHEMA.orderStageOf === 'function') return g.CONSULT_SCHEMA;
+    if (typeof require === 'function') { try { return require('./schema.js'); } catch (e) { return null; } }
+    return null;
   }
   /** 3.3.2 已發送下單通知（本次諮詢流程為等待下單／待交付／已交付）且已確認金額 → 金額鎖定，不可改價 */
   function priceLocked(row) {

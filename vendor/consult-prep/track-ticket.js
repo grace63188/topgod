@@ -23,7 +23,7 @@
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this), function () {
   'use strict';
 
-  var VERSION = '1.2.1';   // 3.3.7 已送出者可下載 ZIP
+  var VERSION = '1.3.0';   // 3.5.1 流程判定改用 schema.flowStepOf（與內部提醒、匯報共用）
   var TZ = 8 * 3600e3;   // 台北時間
   var WK = '日一二三四五六';
   /** 作業狀態（作業小標）：tag class、標籤 */
@@ -166,26 +166,23 @@
   function toolOf(r) { var p = (r && r.p) || {}; return p.tooltest || (r && r.tt) || (r && r.mf && r.mf.tool) || null; }
   /** 本次教材流程：交付教材最新流程（未關閉）優先，其次諮詢準備列的 material */
   function matOf(r) { var mf = r && r.mf; if (mf && !(mf.closedAt || mf.closed)) return mf; var p = (r && r.p) || {}; return p.material || null; }
+  /** 3.5.1 共用判定（schema.flowStepOf／FLOW_STAGE）：瀏覽器取 CONSULT_SCHEMA，Node 測試 require；內部提醒與匯報用同一份 */
+  function schemaRef() {
+    var g = typeof globalThis !== 'undefined' ? globalThis : (typeof window !== 'undefined' ? window : this);
+    if (g && g.CONSULT_SCHEMA && typeof g.CONSULT_SCHEMA.flowStepOf === 'function') return g.CONSULT_SCHEMA;
+    if (typeof require === 'function') { try { return require('./schema.js'); } catch (e) { /* 無 */ } }
+    throw new Error('作業追蹤需要 CONSULT_SCHEMA（schema.js）');
+  }
+  /** 工具公開列的狀態（tooltest 無資料＝make） */
   function tState(t) { var s = t && t.state; return s === 'test' || s === 'fix' || s === 'pass' ? s : 'make'; }
-  function toolStarted(t) { return !!(t && (t.started || t.startedAt || t.toolUrl || Number(t.priceInitial) > 0 || tState(t) !== 'make')); }
+  function toolStarted(t) { return schemaRef().flowToolStarted(normTool(t)); }
+  function normTool(t) { var o = {}; if (t) Object.keys(t).forEach(function (k) { o[k] = t[k]; }); o.state = tState(t); return o; }
   /**
-   * 流程步驟（同 ToolTestUI.stageKey，另判放棄領取與開始製作）：
+   * 流程步驟（schema.flowStepOf；與內部提醒「待看作業」、匯報「已送出待看」同一判定）：
    *   make 未開始製作｜started 已開始未上傳｜test 助教測試中｜fix 待校長修改｜price 確認金額｜order 確認下單｜wait 等待學姐下單｜ready 待交付｜done 已交付｜abandon 已放棄
    */
-  function flowStep(r) {
-    var t = toolOf(r), m = matOf(r), s = tState(t);
-    if (s === 'make') return toolStarted(t) ? 'started' : 'make';
-    if (s !== 'pass') return s;
-    var cyc = String(t.cycle || ''), cur = m && m.state ? (m.cycle ? String(m.cycle) === cyc : (m.state !== 'delivered' || !t.createdAt || String(m.deliveredAt || '') >= String(t.createdAt))) : false;
-    if (cur) {
-      if (m.abandonedAt || m.abandoned) return 'abandon';
-      if (m.state === 'delivered') return 'done';
-      if (m.state === 'ordered') return 'ready';
-      if (m.state === 'notified') return 'wait';
-    }
-    return Number(t.priceConfirmed) > 0 ? 'order' : 'price';
-  }
-  var STEP_STAGE = { make: 'make', started: 'make', test: 'test', fix: 'test', price: 'order', order: 'order', wait: 'order', ready: 'ready', done: 'done', abandon: 'abandon' };
+  function flowStep(r) { return schemaRef().flowStepOf(normTool(toolOf(r)), matOf(r)); }
+
   /** 工具已上傳（含之後各步）：流程以工具／教材為準；之前以作業為準 */
   function flowAdvanced(step) { return step !== 'make' && step !== 'started'; }
   /**
@@ -195,7 +192,7 @@
   function stageOf(r) {
     var step = flowStep(r), k = kind(r);
     if (step === 'abandon') return 'abandon';
-    if (flowAdvanced(step)) return STEP_STAGE[step];
+    if (flowAdvanced(step)) return schemaRef().flowStageOf(step);
     if (k === 'none' || k === 'fill') return 'pending';
     if (k === 'supp') return 'supp';
     if (k === 'over') return 'over';

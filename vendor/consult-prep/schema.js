@@ -2520,8 +2520,12 @@
     var rows = (o.rows || []).map(function (r) {
       var x = {}; Object.keys(r).forEach(function (k) { x[k] = r[k]; });
       var at = x.nextCounsel ? parseDeadline(x.nextCounsel.at) : null;
-      var done = !!(x.dataConfirmed && x.toolDone), sent = x.hw && x.hw.state === 'submitted';
+      var sent = x.hw && x.hw.state === 'submitted', mf = x.material;
+      // 3.5.1 本次作業的教材已交付（交付時間不早於作業送出）＝已完成，不再依賴手動勾選；已放棄的流程不算
+      var delivered = !!(sent && mf && mf.state === 'delivered' && !mf.abandoned && !mf.abandonedAt && (timeToMs(mf.deliveredAt) || 0) >= (timeToMs(x.hw.submittedAt) || 0));
+      var done = !!(x.dataConfirmed && x.toolDone) || delivered;
       x.status = done ? 'done' : !sent ? 'hw' : (x.dataConfirmed || x.toolDone) ? 'doing' : 'todo';
+      if (delivered) x.deliveredDone = true;
       if (at == null) { x.dueAt = ''; x.dueText = ''; x.dueLeftMin = null; x.urgency = 'none'; x.counselMs = null; return x; }
       var due = at - lead * 3600000;
       x.counselMs = at; x.dueMs = due;
@@ -2887,11 +2891,54 @@
    *   tt：tooltest 公開列（state、priceConfirmed、cycle、at）；mat：該學姐最新教材流程（state、cycle、deliveredAt）
    *   教材流程屬於本次諮詢：流程 cycle 與工具 cycle 相同；舊流程（無 cycle）未交付、或交付時間晚於工具建立時間
    */
+  /** 教材流程是否屬於本次諮詢（工具 cycle 相同；舊流程未交付、或交付時間晚於工具建立） */
+  function flowMatCurrent(tt, mat) {
+    tt = tt || {};
+    return !!(mat && mat.state && (mat.cycle ? String(mat.cycle) === String(tt.cycle || '') : (mat.state !== 'delivered' || !tt.createdAt || String(mat.deliveredAt || '') >= String(tt.createdAt))));
+  }
+  /** 3.3.3 是否已開始製作（按開始製作、有工具、已定價、已離開製作中；舊資料同此） */
+  function flowToolStarted(tt) {
+    tt = tt || {}; var s = tt.state || 'make';
+    return !!(tt.started || tt.startedAt || tt.toolUrl || Number(tt.priceInitial) > 0 || (s !== 'make' && s !== ''));
+  }
+  /**
+   * 3.5.1 流程步驟（資料中心、後台、作業追蹤、內部提醒、匯報共用的唯一判定）：
+   *   make 未開始製作｜started 已開始未上傳｜test 助教測試中｜fix 待校長修改｜price 確認金額｜order 確認下單｜wait 等待學姐下單｜ready 待交付｜done 已交付｜abandon 已放棄
+   *   tt：tooltest 公開列（state、started、startedAt、toolUrl、priceInitial、priceConfirmed、cycle、createdAt）；mat：該學姐最新教材流程（state、cycle、deliveredAt、abandonedAt）
+   */
+  function flowStepOf(tt, mat) {
+    tt = tt || {}; var s = tt.state || 'make';
+    if (s === 'make' || !s) return flowToolStarted(tt) ? 'started' : 'make';
+    if (s === 'test' || s === 'fix') return s;
+    if (flowMatCurrent(tt, mat)) {
+      if (mat.abandonedAt || mat.abandoned) return 'abandon';
+      if (mat.state === 'delivered') return 'done';
+      if (mat.state === 'ordered') return 'ready';
+      if (mat.state === 'notified') return 'wait';
+    }
+    return Number(tt.priceConfirmed) > 0 ? 'order' : 'price';
+  }
+  /** 流程步驟 → 作業追蹤 3.3.6 流程分頁：make 待製作（含已開始）、test 測試中（含待修改）、order 下單中（金額、下單、等待）、ready、done、abandon */
+  var FLOW_STAGE = { make: 'make', started: 'make', test: 'test', fix: 'test', price: 'order', order: 'order', wait: 'order', ready: 'ready', done: 'done', abandon: 'abandon' };
+  function flowStageOf(step) { return FLOW_STAGE[step] || 'make'; }
+  /**
+   * 3.5.1 待看作業（內部提醒「學姐作業」21:00 彙整、每日匯報「已送出待看」共用）：
+   *   作業已送出、校長尚未看（未開啟作業、未標資料確認、未自動標已看）、流程仍停在「待製作・尚未開始」
+   *   o = { submitted, dataConfirmed, seen, step }（step＝flowStepOf）；已開始製作、已上傳、測試中、下單中、待交付、已交付、已放棄一律不算
+   */
+  function workReviewPending(o) {
+    o = o || {};
+    if (!o.submitted || o.dataConfirmed || o.seen) return false;
+    return (o.step || 'make') === 'make';
+  }
+  /** 校長動作 → 視為已看作業：開啟作業（open）、開始製作（start）、上傳工具（upload）、定價／確認金額（price） */
+  var WORK_SEEN_EVENTS = ['open', 'start', 'upload', 'price', 'backfill'];
+  /** 學姐所在階段（流程四分頁與交付分頁用）：make 製作工具、test 測試工具、price 確認金額、order 確認下單、wait 等待下單、ready 待交付、log 交付紀錄 */
   function orderStageOf(tt, mat) {
     tt = tt || {}; var s = tt.state || 'make';
     if (s === 'make' || s === 'fix' || !s) return 'make';
     if (s === 'test') return 'test';
-    var cur = mat && mat.state ? (mat.cycle ? String(mat.cycle) === String(tt.cycle || '') : (mat.state !== 'delivered' || !tt.createdAt || String(mat.deliveredAt || '') >= String(tt.createdAt))) : false;
+    var cur = flowMatCurrent(tt, mat);
     if (cur && mat.state === 'delivered') return 'log';
     if (cur && mat.state === 'ordered') return 'ready';
     if (cur && mat.state === 'notified') return 'wait';
@@ -3061,7 +3108,7 @@
 
   /* ---------------- 3.3.7 書籤版本 ---------------- */
   /** 三支書籤共用版本號（src/roster-bookmarklet.js、src/line-map-bookmarklet.js 的 BM_VERSION 需一致；build.py 檢查） */
-  var BOOKMARKLET = { version: '3.4.0', kinds: { roster: '學院後台同步', orders: '同步學院下單', linemap: 'LINE 對應' } };
+  var BOOKMARKLET = { version: '3.5.0', kinds: { roster: '學院後台同步', orders: '同步學院下單', linemap: 'LINE 對應' } };
   /** 'x.y.z' 比較：a < b → -1、相等 0、a > b → 1；無法解析視為 0.0.0 */
   function semverCmp(a, b) {
     var p = function (v) { var m = /^v?(\d{1,4})\.(\d{1,4})\.(\d{1,4})$/.exec(String(v == null ? '' : v).trim()); return m ? [+m[1], +m[2], +m[3]] : [0, 0, 0]; };
@@ -3212,7 +3259,7 @@
     suppOptAdd: suppOptAdd, suppMerge: suppMerge, suppByTarget: suppByTarget, suppPendingCount: suppPendingCount, suppVars: suppVars,
     materialMatch: materialMatch,
     ORDER: ORDER, orderProductIdOf: orderProductIdOf, orderUrlIssue: orderUrlIssue, orderDeadlineOver: orderDeadlineOver, orderLatestByKey: orderLatestByKey, orderSyncFlows: orderSyncFlows, orderDlUrlOk: orderDlUrlOk, orderKeywords: orderKeywords, orderPurchaseNorm: orderPurchaseNorm, orderKeywordHit: orderKeywordHit, orderMatch: orderMatch, orderPurchasesMerge: orderPurchasesMerge,
-    orderPriceIssue: orderPriceIssue, orderQuickDeadline: orderQuickDeadline, orderDownloadDefault: orderDownloadDefault, orderDownloadIssue: orderDownloadIssue, orderFlowDlDeadline: orderFlowDlDeadline, orderStageOf: orderStageOf, orderTrackIndex: orderTrackIndex, orderTimeline: orderTimeline, orderClickToken: orderClickToken, orderClickParse: orderClickParse,
+    orderPriceIssue: orderPriceIssue, orderQuickDeadline: orderQuickDeadline, orderDownloadDefault: orderDownloadDefault, orderDownloadIssue: orderDownloadIssue, orderFlowDlDeadline: orderFlowDlDeadline, orderStageOf: orderStageOf, flowMatCurrent: flowMatCurrent, flowToolStarted: flowToolStarted, flowStepOf: flowStepOf, FLOW_STAGE: FLOW_STAGE, flowStageOf: flowStageOf, workReviewPending: workReviewPending, WORK_SEEN_EVENTS: WORK_SEEN_EVENTS, orderTrackIndex: orderTrackIndex, orderTimeline: orderTimeline, orderClickToken: orderClickToken, orderClickParse: orderClickParse,
     MAT_PRODUCTS: MAT_PRODUCTS,
     normalizeMatProducts: normalizeMatProducts,
     materialProductOf: materialProductOf,
