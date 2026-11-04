@@ -39,8 +39,8 @@ var LMS = {
     activities: ['id', 'json', 'updated_at'],
     state: ['id', 'json', 'updated_at']
   },
-  PUBLIC: ['lms_click'],
-  PRINCIPAL_ONLY: ['lms_settings_save', 'lms_mode_set', 'lms_users_save', 'lms_plan_decide', 'lms_trigger_install', 'lms_auto_set'],
+  PUBLIC: ['lms_click', 'lms_bm'],
+  PRINCIPAL_ONLY: ['lms_settings_save', 'lms_mode_set', 'lms_users_save', 'lms_plan_decide', 'lms_trigger_install', 'lms_auto_set', 'lms_bm_key_get', 'lms_bm_key_new', 'lms_bm_key_revoke'],
   /* 白名單：寫入 lms 試算表的欄位（電話、地址、身分證、生日、密碼、LINE ID、帳號 Email 一律不存） */
   FIELDS: {
     members: ['id', 'key', 'name', 'level', 'expired_at', 'points', 'point_expired_at', 'status', 'registered_at', 'last_login'],
@@ -68,7 +68,7 @@ function lmsDispatch_(req) {
   var me = LMS.PUBLIC.indexOf(act) >= 0 ? null : lmsAuth_(req);
   if (me && LMS.PRINCIPAL_ONLY.indexOf(act) >= 0 && me.role !== 'principal') throw apiError('這個動作只有校長可以執行', 'ERR_FORBIDDEN');
   var out = fn(req, me);
-  if (me && !/^lms_(ping|bootstrap|deadlines|member|catalog|plan_list|plan_get|plan_prev|queue|schedule|preview|test_preview|log|settings_get|tickets|sync_state|ships|todos|nodes_get|templates_get|dump)$/.test(act)) lmsAudit_(me, act, req);
+  if (me && !/^lms_(ping|bootstrap|deadlines|member|catalog|plan_list|plan_get|plan_prev|queue|schedule|preview|test_preview|log|settings_get|tickets|sync_state|ships|todos|nodes_get|templates_get|dump|bm_key_status|bm_key_get)$/.test(act)) lmsAudit_(me, act, req);
   return out;
 }
 var LMS_ACTIONS = {
@@ -116,7 +116,13 @@ var LMS_ACTIONS = {
   lms_dump: function () { return lmsDump_(); },
   lms_state_put: function (req, me) { return lmsStatePut_(req, me); },
   lms_flex_test: function (req, me) { return lmsFlexTest_(req, me); },
-  lms_wb_ticket: function (req, me) { return lmsWbTicket_(req, me); }
+  lms_wb_ticket: function (req, me) { return lmsWbTicket_(req, me); },
+  /* 書籤同步專用金鑰：狀態、取得（組成書籤）、重新產生、撤銷；lms_bm＝書籤以金鑰直接同步 */
+  lms_bm_key_status: function () { return lmsBmKeyStatus_(); },
+  lms_bm_key_get: function (req, me) { return lmsBmKeyGet_(req, me); },
+  lms_bm_key_new: function (req, me) { return lmsBmKeyNew_(req, me); },
+  lms_bm_key_revoke: function () { return lmsBmKeyRevoke_(); },
+  lms_bm: function (req) { return lmsBm_(req); }
 };
 
 /* ── 登入（Google ID token） ───────────────────────────── */
