@@ -1,0 +1,54 @@
+/**
+ * 學院管理後台（topgod）資料中心擴充｜lms_hub.gs（1.2.0 新增，只新增動作，不改既有行為）
+ *  - lms_dump：一次取回書籤同步的全部資料表＋各模組狀態（作業、諮詢、班級、活動獎勵、通知、活躍排行、設定）
+ *  - lms_state_put：各模組狀態逐筆寫入（每列＝ 表:主鍵 ＋ JSON）
+ *  - lms_flex_test：圖卡只發給設定頁的測試收件人（試營運；不發學姐）
+ *  - lms_wb_ticket：官網寫回工單（一律乾跑，由書籤回報乾跑結果）
+ */
+var LMS_HUB_TABLES = ['members', 'products', 'kinds', 'works', 'cworks', 'counsels', 'site_plans', 'counsel_types', 'goods', 'activities'];
+
+function lmsDump_() {
+  var out = {}, st = lmsSyncState_();
+  LMS_HUB_TABLES.forEach(function (t) { out[t] = lmsRows_(t); });
+  out.state = lmsRows_('state');
+  out.sync = st;
+  out.bound = {};
+  out.members.forEach(function (m) { var b = lmsBound_(m.key); if (b) out.bound[m.id] = b; });
+  out.testRecipients = (lmsSettings_().testRecipients || []).map(function (r) { return { role: r.role, name: r.name, bound: lmsBound_(r.key) }; });
+  out.time = nowIso();
+  return out;
+}
+
+/** lms_state_put { rows:[{ id:'表:主鍵', t, row }], del:['表:主鍵'] } */
+function lmsStatePut_(req, me) {
+  var rows = Array.isArray(req.rows) ? req.rows.slice(0, 400) : [], del = Array.isArray(req.del) ? req.del.slice(0, 400) : [];
+  var clean = rows.filter(function (r) { return r && r.id && r.t; }).map(function (r) { return { id: String(r.id).slice(0, 120), t: String(r.t).slice(0, 40), row: r.row, by: me.email, at: nowIso() }; });
+  var n = lmsPut_('state', clean);
+  var d = del.length ? lmsDel_('state', del.map(String)) : 0;
+  return { saved: n, deleted: d };
+}
+
+/** lms_flex_test { flex, alt, title }：只發給測試收件人（已綁定 @52grace） */
+function lmsFlexTest_(req, me) {
+  var S = lmsSettings_(), rc = lmsTestRecipients_(S).filter(function (r) { return r.bound === 'ok'; });
+  if (!rc.length) throw apiError('沒有已綁定 @52grace 的測試收件人，請先到設定頁選擇', 'ERR_VALIDATION');
+  if (!req.flex || typeof req.flex !== 'object') throw apiError('缺少圖卡內容', 'ERR_VALIDATION');
+  var flex = JSON.stringify(req.flex); if (flex.length > 45000) throw apiError('圖卡內容過大', 'ERR_VALIDATION');
+  var alt = '【試營運】' + cleanText(req.alt || req.title || '圖卡').slice(0, 300);
+  var cid = 'x' + LMS_CORE.hash(flex + Date.now()).slice(0, 11), meta = [], messages = [];
+  rc.forEach(function (r) {
+    messages.push({ key: r.key, name: r.name, text: alt, flex: JSON.parse(flex), tooLong: false });
+    meta.push({ card: { id: cid + '-' + r.key.slice(0, 6), mem_id: '', memberName: r.name, kind: String(req.kind || 'lms').slice(0, 20), title: alt, body: '', rows: [], items: [], to: { key: r.key, name: r.name }, trial: true, test: true, button: { url: String(req.url || ''), tracked: '' }, secondary: null, link: null, hero: '' }, sp: { nodes: [], test: true }, skipped: [] });
+  });
+  var out = lmsPushCards_(meta, messages, me, { manual: true, test: true });
+  return { sent: out.sent, results: out.results, recipients: rc.map(function (r) { return { role: r.role, name: r.name }; }) };
+}
+
+/** lms_wb_ticket { source, memId, memberName, requests:[{ method, path, body }] }：一律乾跑 */
+function lmsWbTicket_(req, me) {
+  var reqs = (Array.isArray(req.requests) ? req.requests : []).slice(0, 30).map(function (r) { return { method: String(r.method || 'POST').slice(0, 6), path: String(r.path || '').slice(0, 160), body: r.body || {} }; });
+  if (!reqs.length) throw apiError('缺少寫回內容', 'ERR_VALIDATION');
+  var t = { id: 'w' + LMS_CORE.hash(JSON.stringify(reqs) + Date.now()).slice(0, 11), source: String(req.source || '').slice(0, 60), mem_id: Number(req.memId) || '', memberName: cleanText(req.memberName).slice(0, 40), dryRun: true, status: 'pending', requests: reqs, at: nowIso(), by: me.email };
+  lmsPut_('tickets', [t]);
+  return { ticket: t };
+}
