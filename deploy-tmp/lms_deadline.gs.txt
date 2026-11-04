@@ -1,0 +1,1230 @@
+/**
+ * 學院管理後台（topgod）資料中心擴充｜lms_deadline.gs
+ * 截止總覽、提醒節點、發送佇列、預覽、發送、點擊紀錄、物流寄送、每日截止通知觸發器
+ * 下方 LMS_CORE 由建置程式從 shared/lms-core.js 嵌入（與後台、單元測試同一份程式）
+ */
+/* ── 以下為 shared/lms-core.js（建置時嵌入，勿直接修改） ── */
+/*
+ * 學院管理後台（topgod）共用核心：截止分類、截止項目、提醒節點、圖卡、連結範本、排課規則
+ * 同一份程式在三個地方執行：後台瀏覽器（esbuild 打包）、Node 單元測試、Apps Script（建置時嵌入 gas/lms_deadline.gs）
+ * 只用 ES2017 語法、不依賴 DOM 與 Node API；時間一律以台北時間（UTC+8，無日光節約）計算
+ */
+(function (root, factory) {
+  var api = factory();
+  if (typeof module === 'object' && module && module.exports) module.exports = api;
+  root.LMS_CORE = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+  'use strict';
+
+  var VERSION = '1.1.0';
+  var DAY = 86400000, HOUR = 3600000, MIN = 60000, TZ_OFF = 8 * HOUR;
+
+  /* ── 時間 ─────────────────────────────────────────────── */
+  function parse(v) {
+    if (v == null || v === '') return NaN;
+    if (typeof v === 'number') return v;
+    if (v instanceof Date) return v.getTime();
+    var s = String(v).trim();
+    var m = /^(\d{4})[-./](\d{1,2})[-./](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?(Z|[+-]\d{2}:?\d{2})?$/.exec(s);
+    if (!m) { var t = Date.parse(s); return isNaN(t) ? NaN : t; }
+    var utc = Date.UTC(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));
+    if (!m[7]) return utc - TZ_OFF;
+    if (m[7] === 'Z') return utc;
+    var sg = m[7][0] === '-' ? -1 : 1, hh = +m[7].slice(1, 3), mm = +m[7].slice(-2);
+    return utc - sg * (hh * HOUR + mm * MIN);
+  }
+  function parts(ms) { var d = new Date(ms + TZ_OFF); return { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate(), h: d.getUTCHours(), mi: d.getUTCMinutes(), wd: d.getUTCDay() }; }
+  function p2(n) { return (n < 10 ? '0' : '') + n; }
+  /** yyyy.mm.dd（全站日期格式） */
+  function fmtD(v) { var t = parse(v); if (isNaN(t)) return ''; var p = parts(t); return p.y + '.' + p2(p.m) + '.' + p2(p.d); }
+  function fmtDT(v) { var t = parse(v); if (isNaN(t)) return ''; var p = parts(t); return fmtD(t) + ' ' + p2(p.h) + ':' + p2(p.mi); }
+  function fmtT(v) { var t = parse(v); if (isNaN(t)) return ''; var p = parts(t); return p2(p.h) + ':' + p2(p.mi); }
+  function dayKey(v) { var t = parse(v); var p = parts(t); return p.y + '-' + p2(p.m) + '-' + p2(p.d); }
+  function iso(v) { var t = parse(v); if (isNaN(t)) return ''; var p = parts(t); return dayKey(t) + 'T' + p2(p.h) + ':' + p2(p.mi) + ':' + p2(new Date(t + TZ_OFF).getUTCSeconds()) + '+08:00'; }
+  function startOfDay(v) { var t = parse(v); return t - ((t + TZ_OFF) % DAY + DAY) % DAY; }
+  function at(day, hm) { var s = startOfDay(day), x = String(hm || '00:00').split(':'); return s + (+x[0] || 0) * HOUR + (+x[1] || 0) * MIN; }
+  function addDays(v, n) { return parse(v) + n * DAY; }
+  /** 剩餘天數：以日曆日計（今天到期＝0，昨天＝-1） */
+  function daysLeft(v, now) { return Math.round((startOfDay(v) - startOfDay(now)) / DAY); }
+  /** 週鍵：週一起算（yyyy-mm-dd 為該週週一） */
+  function weekKey(v) { var s = startOfDay(v), wd = parts(s).wd; return dayKey(s - ((wd + 6) % 7) * DAY); }
+  function hmToMin(hm) { var x = String(hm || '0:0').split(':'); return (+x[0] || 0) * 60 + (+x[1] || 0); }
+  /** 安靜時段（預設 21:30–09:00）：在時段內回傳下一個可發送時間，否則原樣 */
+  function inQuiet(t, quiet) {
+    var q = quiet || DEFAULTS.quiet, p = parts(t), m = p.h * 60 + p.mi, a = hmToMin(q.from), b = hmToMin(q.to);
+    return a > b ? (m >= a || m < b) : (m >= a && m < b);
+  }
+  function quietRelease(t, quiet) {
+    var q = quiet || DEFAULTS.quiet;
+    if (!inQuiet(t, q)) return t;
+    var p = parts(t), m = p.h * 60 + p.mi, b = hmToMin(q.to);
+    var base = m >= b ? startOfDay(t) + DAY : startOfDay(t);
+    return base + b * MIN;
+  }
+
+  /* ── 級別與分類 ─────────────────────────────────────────── */
+  var LEVELS = { 1: '入學生', 2: '打底層', 3: '鑽石', 4: '至尊', 5: '皇家至尊' };
+  /** 課程專區（官網頂層分類 → 本系統代碼）；作業第二層、學習地圖、排課分頁共用同一份 */
+  var ZONES = [
+    { key: 'main', name: '正課區', kinds: [1] },
+    { key: 'case', name: '案例專區', kinds: [16] },
+    { key: 'ai', name: 'AI 應用', kinds: [65] },
+    { key: 'private', name: '私享專場', kinds: [] },
+    { key: 'lead', name: '培養領導力', kinds: [11] },
+    { key: 'radio', name: '10分有力', kinds: [22] },
+    { key: 'other', name: '其他專區', kinds: [] }
+  ];
+  /** 截止分類三層：第一層三大類，第二層子類，第三層（案例專區）依系列 */
+  var TAXONOMY = [
+    { key: 'watch', name: '觀看到期', icon: 'hourglass', color: '#D9B877', def: '預錄課程的觀看期限', subs: [
+      { key: 'main', name: '正課區' }, { key: 'case', name: '案例專區', series: true }, { key: 'ai', name: 'AI 應用' }, { key: 'private', name: '私享專場' }, { key: 'lead', name: '培養領導力' }, { key: 'radio', name: '10分有力' }, { key: 'other', name: '其他專區' }] },
+    { key: 'account', name: '學員帳號到期', icon: 'crown', color: '#B9A2F2', def: '級別與點數（課費）的到期日', subs: [
+      { key: 'level', name: '級別到期' }, { key: 'points', name: '點數到期' }] },
+    { key: 'work', name: '作業到期', icon: 'stamp', color: '#FF77B2', def: '所有課程分類中即將到期的作業與下單期限', subs: [
+      { key: 'main', name: '正課區' }, { key: 'case', name: '案例專區', series: true }, { key: 'ai', name: 'AI 應用' },
+      { key: 'private', name: '私享專場與入群前作業' }, { key: 'consult', name: '一對一諮詢' }, { key: 'plan', name: '課表下單截止' }, { key: 'other', name: '其他專區' }] }
+  ];
+  /** 提醒種類（節點以種類為單位設定） */
+  var KINDS = {
+    watch: { name: '觀看到期', l1: 'watch', btn: 'watch', btn1: 'watch1', link: 'watch', hero: 'deadline' },
+    work: { name: '課程作業', l1: 'work', btn: 'work', btn1: 'work0', link: 'work', hero: 'deadline' },
+    gwork: { name: '入群前作業', l1: 'work', btn: 'gwork', btn1: 'gwork', link: 'gwork', hero: 'deadline' },
+    cwork: { name: '輔導作業', l1: 'work', btn: 'cwork', btn1: 'cwork', link: 'cwork', hero: 'deadline' },
+    corder: { name: '課後諮詢下單期限', l1: 'work', btn: 'corder', btn1: 'corder', link: 'corder', hero: 'deadline' },
+    plan: { name: '課表下單截止', l1: 'work', btn: 'plan', btn1: 'plan', link: 'plan', hero: 'deadline' },
+    level: { name: '級別到期', l1: 'account', btn: 'level', btn1: 'level', link: 'level', hero: 'deadline' },
+    points: { name: '點數到期', l1: 'account', btn: 'points', btn1: 'points', link: 'points', hero: 'deadline' },
+    ship: { name: '物流寄送', l1: null, btn: 'ship1', btn1: 'ship1', link: 'carrier', hero: 'ship' },
+    schedule: { name: '進修課表公告', l1: null, btn: 'schedule', btn1: 'schedule', link: 'plan', hero: 'schedule' }
+  };
+  var WORK_TYPES = { K: '重點精華筆記', G: '入群前作業', P: '課前作業', N: '課後作業', C: '輔導單' };
+  /** 自動提醒類別（設定頁開關順序）；work 涵蓋課程作業 K／P／N */
+  var AUTO_KINDS = ['watch', 'level', 'points', 'work', 'gwork', 'cwork', 'plan', 'corder', 'ship'];
+  /** 一對一諮詢可排項目（排課頁「一對一諮詢」分頁）；資格規則：after＝課後輔導、case＝案例指導、ai＝AI 策略調整 */
+  var CONSULT_TYPES = [
+    { id: 37, name: '課後輔導', points: 8800, rule: 'after' }, { id: 38, name: '購課建議', points: 8800, rule: '' }, { id: 39, name: '個人進修計畫', points: 8800, rule: '' },
+    { id: 40, name: '品牌定位諮詢', points: 12800, rule: '' }, { id: 41, name: '經營策略諮詢', points: 12800, rule: '' }, { id: 42, name: '團隊管理諮詢', points: 12800, rule: '' },
+    { id: 43, name: '行銷企劃諮詢', points: 12800, rule: '' }, { id: 44, name: '覆盤諮詢', points: 8800, rule: '' }, { id: 45, name: '案例指導', points: 8800, rule: 'case' }, { id: 47, name: 'AI 策略調整', points: 8800, rule: 'ai' }
+  ];
+
+  var SITE = 'https://www.graceschool.com.tw';
+  var DEFAULTS = {
+    mode: 'trial',
+    quiet: { from: '21:30', to: '09:00' },
+    sendTime: '12:00',
+    weeklyCap: 3,
+    trialAutoMax: 3,
+    offsets: { watch: [14, 7, 1], work: [3, 0], gwork: [3, 0], cwork: [3, 0], plan: [3, 0], corder: [3, 0], level: [30, 14, 7, 1], points: [30, 14, 7, 1], ship: [-7] },
+    /* 自動提醒類別開關：預設全部關閉；關閉的類別仍出現在截止總覽與節點時間軸（標示「自動提醒未開啟」），但不會自動發送 */
+    autoKinds: { watch: false, level: false, points: false, work: false, gwork: false, cwork: false, plan: false, corder: false, ship: false },
+    /* 每日排程執行後以天使 OA 發摘要給校長 */
+    dailySummary: true,
+    /* 測試收件人（校長、助教；須為已對應 @52grace 的名冊鍵） */
+    testRecipients: [],
+    links: {
+      plan: SITE + '/member/challenge',
+      watch: SITE + '/product/show/{pro_id}',
+      work: SITE + '/product/show/{pro_id}',
+      gwork: SITE + '/product/show/{pro_id}',
+      cwork: SITE + '/product/show/{pro_id}',
+      corder: SITE + '/counseling/index',
+      level: SITE + '/about/spec/grade',
+      points: SITE + '/stored/index',
+      home: SITE + '/'
+    },
+    carriers: {
+      sf: { name: '順豐', url: 'https://www.sf-express.com/tw/tc/dynamic_function/waybill/#search/bill-number/{no}' },
+      post: { name: '中華郵政', url: 'https://postserv.post.gov.tw/pstmail/main_mail.html?targetTxn=EB500100&MAILNO={no}' },
+      other: { name: '其他', url: '' }
+    },
+    goBase: 'https://grace63188.github.io/consult-prep/go.html',
+    assetBase: 'https://grace63188.github.io/topgod/assets/cards/',
+    oaId: '@52grace'
+  };
+  /** 官網連結白名單（與 go.html 相同）；物流查詢另列物流商網域 */
+  var SITE_RE = /^https:\/\/(www\.)?graceschool\.com\.tw(\/[^\s"'<>]*)?$/;
+  var CARRIER_RE = /^https:\/\/(www\.sf-express\.com|postserv\.post\.gov\.tw)(\/[^\s"'<>]*)?$/;
+
+  function merge(a, b) {
+    var o = {}, k;
+    for (k in a) o[k] = a[k];
+    for (k in (b || {})) {
+      if (b[k] && typeof b[k] === 'object' && !Array.isArray(b[k]) && a[k] && typeof a[k] === 'object' && !Array.isArray(a[k])) o[k] = merge(a[k], b[k]);
+      else if (b[k] !== undefined) o[k] = b[k];
+    }
+    return o;
+  }
+  function settingsOf(s) { return merge(DEFAULTS, s || {}); }
+  /** 類別自動提醒是否開啟（未設定一律視為關閉） */
+  function autoOn(S, kind) { var a = (S && S.autoKinds) || {}; return a[kind] === true; }
+  function fillUrl(tpl, vars) {
+    return String(tpl || '').replace(/\{(\w+)\}/g, function (_, k) { return vars && vars[k] != null ? encodeURIComponent(String(vars[k])) : ''; });
+  }
+  function urlIssue(u, allowCarrier) {
+    if (!u) return '沒有網址';
+    if (SITE_RE.test(u)) return '';
+    if (allowCarrier && CARRIER_RE.test(u)) return '';
+    return '不在允許的網域（只允許學院官網' + (allowCarrier ? '與物流商' : '') + '）';
+  }
+
+  /* ── 產品與分區 ─────────────────────────────────────────── */
+  /** 由分類樹算出每個分類的頂層（官網 /products/kind：{id,name,parent_id}） */
+  function kindIndex(kinds) {
+    var by = {}; (kinds || []).forEach(function (k) { by[k.id] = k; });
+    function chain(id) { var out = [], k = by[id], guard = 0; while (k && guard++ < 8) { out.unshift(k); k = by[k.parent_id]; } return out; }
+    return { by: by, chain: chain };
+  }
+  function zoneOfKinds(chain, name) {
+    var top = chain[0];
+    if (/^《?資格證/.test(name || '') || (top && /私享/.test(top.name))) return 'private';
+    if (!top) return 'other';
+    for (var i = 0; i < ZONES.length; i++) if (ZONES[i].kinds.indexOf(top.id) >= 0) return ZONES[i].key;
+    if (/正課/.test(top.name)) return 'main';
+    if (/案例/.test(top.name)) return 'case';
+    if (/AI/.test(top.name)) return 'ai';
+    if (/領導/.test(top.name)) return 'lead';
+    if (/10分/.test(top.name)) return 'radio';
+    return 'other';
+  }
+  /** 產品正規化：zone、第二層、系列名、集數 */
+  function productInfo(p, kidx) {
+    var chain = kidx ? kidx.chain(p.kind_id) : [];
+    var zone = p.zone || zoneOfKinds(chain, p.name);
+    var l2 = p.l2 || (chain[1] ? chain[1].name : (chain[0] ? chain[0].name : ''));
+    var series = p.series || (zone === 'case' ? (chain[chain.length - 1] || {}).name || l2 : l2);
+    var m = /(\d+)\s*[】\]）)]?\s*$/.exec(String(p.name || '')) || /第\s*(\d+)\s*[集堂]/.exec(String(p.name || ''));
+    return { zone: zone, l2: l2 || zoneName(zone), series: series || '', seq: p.seq != null ? p.seq : (m ? +m[1] : null) };
+  }
+  function zoneName(k) { for (var i = 0; i < ZONES.length; i++) if (ZONES[i].key === k) return ZONES[i].name; return '其他專區'; }
+  /** 觀看天數依購買當下級別：open_days {級別:天數}；沒有該級別時取最接近的較低級別 */
+  function openDaysFor(p, level) {
+    var od = p && p.open_days; if (!od) return null;
+    for (var l = level; l >= 1; l--) if (od[l] != null) return +od[l];
+    var ks = Object.keys(od).map(Number).sort(); return ks.length ? +od[ks[0]] : null;
+  }
+  function levelAt(history, memId, when, current) {
+    var t = parse(when);
+    var h = (history || []).filter(function (x) { return x.mem_id === memId; }).sort(function (a, b) { return parse(a.at) - parse(b.at); });
+    var before = h.filter(function (x) { return parse(x.at) <= t; });
+    if (before.length) return before[before.length - 1].to_level;
+    var after = h.filter(function (x) { return parse(x.at) > t; });
+    return after.length ? after[0].from_level : current;
+  }
+  /** 觀看到期：官網 expired_at 優先；沒有時以購買時間＋購買當下級別的觀看天數推算 */
+  function watchExpiry(row, product, member, history) {
+    if (row.expired_at) return iso(row.expired_at);
+    var lv = levelAt(history, row.mem_id, row.created_at, member ? member.level : 1);
+    var d = openDaysFor(product, lv);
+    return d == null || !row.created_at ? '' : iso(addDays(row.created_at, d));
+  }
+
+  /* ── 截止項目 ─────────────────────────────────────────── */
+  /**
+   * collect(db, opt) → items[]：{ id, kind, l1, l2, l3, mem_id, title, course, at, left, done, doneReason, vars, src }
+   * db：{ members, products, kinds, works, cworks, counsels, plans, history, watch }（同步後的白名單資料）
+   * opt.now、opt.includeDone（預設 false：已完成不列入總覽，但提醒排程會看 done）
+   */
+  function collect(db, opt) {
+    opt = opt || {};
+    var now = opt.now != null ? parse(opt.now) : Date.now();
+    var kidx = kindIndex(db.kinds);
+    var P = {}; (db.products || []).forEach(function (p) { P[p.id] = p; });
+    var M = {}; (db.members || []).forEach(function (m) { M[m.id] = m; });
+    var active = function (id) { var m = M[id]; return m && (m.status || 'Y') === 'Y'; };
+    var out = [];
+    var info = {};
+    function pinfo(id) { if (!info[id]) info[id] = productInfo(P[id] || { id: id, name: '' }, kidx); return info[id]; }
+    function push(o) {
+      if (!o.at) return;
+      o.left = daysLeft(o.at, now);
+      o.done = !!o.doneReason;
+      if (o.done && !opt.includeDone) return;
+      out.push(o);
+    }
+    var owned = {};   // mem_id → { pro_id: 最早購買 }
+    (db.works || []).forEach(function (w) { if (!owned[w.mem_id]) owned[w.mem_id] = {}; if (!owned[w.mem_id][w.pro_id] || parse(w.created_at) < parse(owned[w.mem_id][w.pro_id])) owned[w.mem_id][w.pro_id] = w.created_at; });
+    var watchPct = {}; (db.watch || []).forEach(function (x) { if (x.pct != null) watchPct[x.mem_id + ':' + x.pro_id] = x.pct; });
+    var seenWatch = {};
+    (db.works || []).forEach(function (w) {
+      if (!active(w.mem_id)) return;
+      var p = P[w.pro_id] || { id: w.pro_id, name: w.pro_name || ('課程 #' + w.pro_id) }, pi = pinfo(w.pro_id);
+      /* 觀看到期：一筆購課一項（同一購課的多份作業只算一次） */
+      if (p.video !== false && !seenWatch[w.mem_pro_id] && w.pro_status !== 'N') {
+        seenWatch[w.mem_pro_id] = 1;
+        var exp = watchExpiry(w, p, M[w.mem_id], db.history);
+        var pct = watchPct[w.mem_id + ':' + w.pro_id];
+        if (exp) push({ id: 'watch:' + w.mem_pro_id, kind: 'watch', l1: 'watch', l2: pi.zone, l3: pi.zone === 'case' ? pi.series : '', mem_id: w.mem_id, title: p.name + ' 觀看期限', course: p.name, at: exp,
+          doneReason: pct >= 100 ? '已看完' : '', vars: { pro_id: w.pro_id }, src: 'members/works#' + w.mem_pro_id });
+      }
+      /* 課後諮詢下單期限 */
+      if (w.counsel_deadline_at && !seenWatch['c' + w.mem_pro_id]) {
+        seenWatch['c' + w.mem_pro_id] = 1;
+        var ordered = (db.counsels || []).some(function (c) { return c.mem_id === w.mem_id && (c.pro_id === w.pro_id || /課後/.test(c.type_name || '')) && parse(c.created_at) >= parse(w.created_at) && c.status !== 'cancelled'; });
+        push({ id: 'corder:' + w.mem_pro_id, kind: 'corder', l1: 'work', l2: 'consult', l3: '', mem_id: w.mem_id, title: p.name + '｜課後諮詢下單期限', course: p.name, at: iso(w.counsel_deadline_at),
+          doneReason: ordered ? '已下單課後諮詢' : '', vars: { pro_id: w.pro_id }, src: 'members/works#' + w.mem_pro_id });
+      }
+      /* 課程作業（K、G、P、N、C） */
+      if (w.mem_work_id && w.deadline_at) {
+        var g = w.work_type === 'G';
+        var dn = w.status === 'Y' ? '作業已審核通過' : w.upload_at ? '作業已上傳' : '';
+        push({ id: 'work:' + w.mem_work_id, kind: g ? 'gwork' : 'work', l1: 'work', l2: g ? 'private' : (pi.zone === 'lead' || pi.zone === 'radio' ? 'other' : pi.zone), l3: pi.zone === 'case' && !g ? pi.series : '',
+          mem_id: w.mem_id, title: p.name + '｜' + (w.work_title || WORK_TYPES[w.work_type] || '作業'), course: p.name, workType: w.work_type, at: iso(w.deadline_at),
+          doneReason: dn, vars: { pro_id: w.pro_id, work_id: w.work_id }, src: 'members/works#' + w.mem_work_id });
+      }
+    });
+    /* 輔導作業 */
+    (db.cworks || []).forEach(function (c) {
+      if (!active(c.mem_id) || !c.deadline_at) return;
+      push({ id: 'cwork:' + c.id, kind: 'cwork', l1: 'work', l2: 'consult', l3: '', mem_id: c.mem_id, title: (c.title || '輔導作業'), course: c.counsel_title || '一對一諮詢', at: iso(c.deadline_at),
+        doneReason: c.status === 'Y' || c.status === '已通過' ? '輔導作業已審核通過' : c.upload_at ? '輔導作業已上傳' : '', vars: { counsel_id: c.counsel_id, pro_id: c.pro_id }, src: 'member-counsel-works#' + c.id });
+    });
+    /* 官網進修課表堂次 */
+    (db.plans || []).forEach(function (pl) {
+      if (!active(pl.mem_id) || (pl.status && pl.status !== 'active')) return;
+      (pl.tasks || []).forEach(function (t) {
+        if (!t.order_deadline) return;
+        var p = P[t.product_id] || { name: t.product_name || ('課程 #' + t.product_id) };
+        var bought = owned[pl.mem_id] && owned[pl.mem_id][t.product_id];
+        push({ id: 'plan:' + (t.id || pl.id + '-' + t.product_id), kind: 'plan', l1: 'work', l2: 'plan', l3: '', mem_id: pl.mem_id, title: p.name + '｜課表下單截止', course: p.name, at: iso(t.order_deadline),
+          doneReason: t.status === 'completed' ? '該堂已下單' : bought && parse(bought) >= parse(pl.created_at || 0) ? '該堂已購買' : '', vars: { pro_id: t.product_id }, src: 'study-plans#' + pl.id });
+      });
+    });
+    /* 級別與點數到期 */
+    (db.members || []).forEach(function (m) {
+      if ((m.status || 'Y') !== 'Y') return;
+      if (m.expired_at && m.level > 1) push({ id: 'level:' + m.id, kind: 'level', l1: 'account', l2: 'level', l3: '', mem_id: m.id, title: LEVELS[m.level] + ' 級別到期', course: LEVELS[m.level], at: iso(m.expired_at), doneReason: '', vars: {}, src: 'members#' + m.id });
+      if (m.point_expired_at && (+m.points || 0) > 0) push({ id: 'points:' + m.id, kind: 'points', l1: 'account', l2: 'points', l3: '', mem_id: m.id, title: '點數到期（餘 ' + num(m.points) + ' 點）', course: '點數', at: iso(m.point_expired_at), doneReason: '', vars: {}, src: 'members#' + m.id });
+    });
+    out.sort(function (a, b) { return parse(a.at) - parse(b.at); });
+    return out;
+  }
+  /** 依時間篩選（今天＝0、3、7、14、30 天內；逾期不列入） */
+  function inRange(item, days, now) { var l = daysLeft(item.at, now); return l >= 0 && l <= days; }
+  /** 分類樹統計：第一層 → 第二層 → 第三層，每節點 { key, name, count, nearest, items } */
+  function tree(items) {
+    return TAXONOMY.map(function (t1) {
+      var a = items.filter(function (x) { return x.l1 === t1.key; });
+      var subs = t1.subs.map(function (t2) {
+        var b = a.filter(function (x) { return x.l2 === t2.key; });
+        var l3 = [];
+        if (t2.series) {
+          var by = {};
+          b.forEach(function (x) { var k = x.l3 || '未分系列'; (by[k] = by[k] || []).push(x); });
+          l3 = Object.keys(by).sort().map(function (k) { return node(k, k, by[k]); });
+        }
+        var n = node(t2.key, t2.name, b); n.l3 = l3; return n;
+      }).filter(function (n) { return n.count > 0 || true; });
+      var n1 = node(t1.key, t1.name, a); n1.icon = t1.icon; n1.color = t1.color; n1.def = t1.def; n1.subs = subs; return n1;
+    });
+    function node(key, name, list) { return { key: key, name: name, count: list.length, nearest: list.length ? list.reduce(function (m, x) { return parse(x.at) < parse(m) ? x.at : m; }, list[0].at) : '', items: list }; }
+  }
+
+  /* ── 提醒節點 ─────────────────────────────────────────── */
+  /**
+   * 個人節點：personal[] = { id, mem_id, scope:{ item?:項目 id, kind?:種類 }, nodes:[{ days, time? }] }
+   * 項目層級優先於種類層級。回傳 { list, src } 或 null
+   */
+  function personalFor(personal, item) {
+    var mine = (personal || []).filter(function (p) { return p.mem_id === item.mem_id; });
+    var byItem = mine.filter(function (p) { return p.scope && p.scope.item === item.id; })[0];
+    if (byItem) return { list: byItem.nodes || [], src: 'item', id: byItem.id };
+    var byKind = mine.filter(function (p) { return p.scope && !p.scope.item && p.scope.kind === item.kind; })[0];
+    return byKind ? { list: byKind.nodes || [], src: 'kind', id: byKind.id } : null;
+  }
+  function nodeTime(item, days, time, S) {
+    if (item.kind === 'ship') return quietRelease(at(addDays(item.at, -days), time || S.sendTime), S.quiet);   // 寄送：寄出後 N 天
+    var dl = parse(item.at), t = at(addDays(item.at, -days), time || S.sendTime);
+    if (t > dl) t = Math.max(startOfDay(dl), dl - 2 * HOUR);   // 當天截止時間早於發送時間：提早到截止前 2 小時
+    return quietRelease(t, S.quiet);
+  }
+  /**
+   * 單一項目的提醒節點（不含合併與每週上限）：
+   *  個人節點先跑；個人節點跑完後回到預設節點，早於最後一個個人節點的預設節點標為「由個人節點取代」；
+   *  同一天個人節點與預設節點相撞只留一則；已過時點略過；項目已完成則之後全部取消
+   */
+  function itemNodes(item, ctx) {
+    var S = ctx.S, now = ctx.now, log = ctx.sentByNode || {}, paused = ctx.paused || {};
+    var defs = (S.offsets[item.kind] || []).map(function (d) { return { days: d, src: 'default' }; });
+    var pers = personalFor(ctx.personal, item);
+    var list = [];
+    if (pers) pers.list.forEach(function (n) { list.push({ days: +n.days, time: n.time, src: 'personal' }); });
+    var lastPersonal = -Infinity;
+    list.forEach(function (n) { n.t = nodeTime(item, n.days, n.time, S); if (n.t > lastPersonal) lastPersonal = n.t; });
+    var perDay = {};
+    list.forEach(function (n) { perDay[dayKey(n.t)] = 1; });
+    defs.forEach(function (n) {
+      n.t = nodeTime(item, n.days, null, S);
+      if (pers && n.t <= lastPersonal) { n.skip = '由個人節點取代'; }
+      else if (perDay[dayKey(n.t)]) { n.skip = '與個人節點同一天，只發一則'; }
+      list.push(n);
+    });
+    list.sort(function (a, b) { return a.t - b.t; });
+    var dlDay = dayKey(item.at);
+    return list.map(function (n) {
+      var id = item.id + '|' + dlDay + '|' + (n.src === 'personal' ? 'p' : 'd') + n.days;
+      var sent = log[id];
+      var o = { id: id, item: item.id, mem_id: item.mem_id, kind: item.kind, days: n.days, src: n.src, t: n.t, at: iso(n.t), status: 'pending', reason: '' };
+      if (sent) { o.status = 'sent'; o.sentAt = sent.sentAt; o.clickAt = sent.clickAt || ''; o.card = sent.card; return o; }
+      if (n.skip) { o.status = 'skipped'; o.reason = n.skip; return o; }
+      if (item.done) { o.status = 'skipped'; o.reason = '已完成：' + item.doneReason; return o; }
+      if (paused[item.id] || paused['m:' + item.mem_id]) { o.status = 'paused'; o.reason = '已暫停'; return o; }
+      if (n.t < startOfDay(now)) { o.status = 'skipped'; o.reason = '時點已過'; return o; }
+      if (item.kind !== 'ship' && n.t > parse(item.at)) { o.status = 'skipped'; o.reason = '時點晚於截止'; return o; }
+      if (!autoOn(S, item.kind)) { o.status = 'off'; o.reason = '自動提醒未開啟'; return o; }
+      return o;
+    });
+  }
+  /** 優先順序（越小越急）：最後一天 ＞ 接近截止 ＞ 期限尚遠 */
+  function urgency(item, now) { var l = daysLeft(item.at, now); return l <= 0 ? 0 : l <= 6 ? 1 : 2; }
+  /**
+   * plan(items, ctx) → { nodes:{ itemId:[node] }, cards:[{ id, mem_id, day, sendAt, nodes, items, merged, capped }], offCards:[同結構，off:true] }
+   * ctx：{ S, now, personal, log:[sent card], paused, horizon(天，預設 45) }
+   *  同一學姐同一天的待發節點合併成一張卡；每位學姐每週（週一起算）最多 S.weeklyCap 張（已發送的也計入），超過的依急迫度略過
+   *  類別開關關閉的節點（status off）不進 cards，另以 offCards 回傳給提醒排程頁顯示「未開啟，開啟後將會發送」
+   */
+  function planReminders(items, ctx) {
+    var S = ctx.S = settingsOf(ctx.S), now = ctx.now = parse(ctx.now != null ? ctx.now : Date.now());
+    var sentByNode = {}, weekSent = {};
+    (ctx.log || []).forEach(function (c) {
+      (c.nodes || []).forEach(function (nid) { sentByNode[nid] = { sentAt: c.sentAt, clickAt: c.clickAt, card: c.id }; });
+      if (c.counted !== false && c.sentAt && !c.manualExempt) { var k = c.mem_id + '@' + weekKey(c.sentAt); weekSent[k] = (weekSent[k] || 0) + 1; }
+    });
+    ctx.sentByNode = sentByNode;
+    var horizon = now + (ctx.horizon || 45) * DAY;
+    var byItem = {}, groups = {}, offGroups = {};
+    var IT = {}; items.forEach(function (it) { IT[it.id] = it; });
+    items.forEach(function (it) {
+      var ns = itemNodes(it, ctx); byItem[it.id] = ns;
+      ns.forEach(function (n) {
+        if ((n.status !== 'pending' && n.status !== 'off') || n.t > horizon) return;
+        var g = it.mem_id + '@' + dayKey(n.t), bucket = n.status === 'off' ? offGroups : groups;
+        (bucket[g] = bucket[g] || []).push(n);
+      });
+    });
+    function toCard(ns0, off) {
+      var ns = ns0.sort(function (a, b) { return parse(IT[a.item].at) - parse(IT[b.item].at); });
+      var sendAt = Math.min.apply(null, ns.map(function (n) { return n.t; }));
+      var its = ns.map(function (n) { return IT[n.item]; });
+      return { id: cardId(ns), mem_id: ns[0].mem_id, day: dayKey(sendAt), sendAt: iso(sendAt), t: sendAt, nodes: ns.map(function (n) { return n.id; }), items: its.map(function (x) { return x.id; }),
+        merged: ns.length > 1, prio: Math.min.apply(null, its.map(function (x) { return urgency(x, sendAt); })), kind: its[0].kind, off: !!off };
+    }
+    var cards = Object.keys(groups).map(function (g) { return toCard(groups[g], false); });
+    var offCards = Object.keys(offGroups).map(function (g) { return toCard(offGroups[g], true); }).sort(function (a, b) { return a.t - b.t; });
+    /* 每週上限：依週分組，已發送數＋本週待發，超過者依急迫度、時間略過 */
+    var byWeek = {};
+    cards.forEach(function (c) { var k = c.mem_id + '@' + weekKey(c.t); (byWeek[k] = byWeek[k] || []).push(c); });
+    Object.keys(byWeek).forEach(function (k) {
+      var room = Math.max(0, S.weeklyCap - (weekSent[k] || 0));
+      byWeek[k].sort(function (a, b) { return a.prio - b.prio || a.t - b.t; }).forEach(function (c, i) { if (i >= room) c.capped = true; });
+    });
+    cards.forEach(function (c) {
+      c.nodes.forEach(function (nid) {
+        var n = byItem[nid.split('|')[0]].filter(function (x) { return x.id === nid; })[0];
+        n.card = c.id; if (c.merged) n.mergedWith = c.items.length - 1;
+        if (c.capped) { n.status = 'skipped'; n.reason = '超過每週上限（' + S.weeklyCap + ' 則）'; }
+      });
+    });
+    cards = cards.filter(function (c) { return !c.capped; }).sort(function (a, b) { return a.t - b.t; });
+    return { nodes: byItem, cards: cards, offCards: offCards };
+  }
+  function cardId(nodes) { return 'c' + hash(nodes.map(function (n) { return n.id; }).join(',')).slice(0, 12); }
+  /** 發送前重新檢查：用最新資料判斷每個項目是否已完成，回傳 { keep:[id], skip:[{id,reason}] } */
+  function recheck(itemIds, freshItems) {
+    var F = {}; (freshItems || []).forEach(function (x) { F[x.id] = x; });
+    var keep = [], skip = [];
+    itemIds.forEach(function (id) {
+      var x = F[id];
+      if (!x) skip.push({ id: id, reason: '同步資料已無此項目（可能已完成或已移除）' });
+      else if (x.done) skip.push({ id: id, reason: '已完成：' + x.doneReason });
+      else keep.push(id);
+    });
+    return { keep: keep, skip: skip };
+  }
+  /**
+   * 手動提醒時間判斷：安靜時段內 → { quiet:true, deferTo }；校長可選強制立即（force）
+   */
+  function manualTiming(now, S, force) {
+    S = settingsOf(S); var t = parse(now);
+    if (!inQuiet(t, S.quiet)) return { quiet: false, sendAt: iso(t) };
+    var rel = quietRelease(t, S.quiet);
+    return force ? { quiet: true, forced: true, sendAt: iso(t), deferTo: iso(rel) } : { quiet: true, forced: false, sendAt: iso(rel), deferTo: iso(rel) };
+  }
+  /** 試營運：所有學姐通知改發校長預覽收件人 */
+  function recipientFor(member, S) {
+    S = settingsOf(S);
+    if (S.mode !== 'live') return { key: S.previewKey || '', name: '校長（試營運預覽）', trial: true, original: member ? member.name : '' };
+    return { key: member ? member.key : '', name: member ? member.name : '', trial: false };
+  }
+
+  /* ── 文案與圖卡 ─────────────────────────────────────────── */
+  var TEMPLATES = {
+    watch: {
+      far: { title: '{課名}觀看期限還有 {剩餘天數} 天', body: '{稱呼}學姐好🤍 {課名}的觀看期限到 {截止日}。\n時間還很充裕，建議先挑一個固定時段，進度就會穩穩往前🥰' },
+      near: { title: '{課名}觀看期限剩最後一週', body: '{稱呼}學姐，{課名}觀看期限到 {截止日}，還有 {剩餘天數} 天。\n這週每天留 20 分鐘，就能慢慢補完🤍' },
+      last: { title: '{課名}明天就到期了', body: '{稱呼}學姐，{課名}觀看期限到 {截止日}，之後就無法再開啟🥹\n今晚留一段時間給自己，先把最想看的章節看完🤍' }
+    },
+    work: {
+      near: { title: '{課名}作業 {截止日} 截止', body: '{稱呼}學姐好，{課名}的作業還有 {剩餘天數} 天截止。\n再往前一步就好🤍 有卡住的地方，回覆官方 LINE，助教會協助學姐。' },
+      last: { title: '{課名}作業今天 23:59 截止', body: '{稱呼}學姐，{課名}的作業今天 {截止日} 23:59 截止。\n請學姐記得準時繳交，逾時會影響後續諮詢的資格與權益喔🥹🤍' }
+    },
+    gwork: {
+      near: { title: '入群前的小準備', body: '{稱呼}學姐，歡迎加入{課名}🤍\n入群前先完成一份約 10 分鐘的自我介紹作業，{截止日} 前完成，助教就會邀請學姐入群🥰' },
+      last: { title: '入群前作業今天截止', body: '{稱呼}學姐，{課名}的入群前作業今天 {截止日} 23:59 截止。\n完成後助教就會邀請學姐入群，大家都在等學姐🤍' }
+    },
+    cwork: {
+      near: { title: '輔導作業 {截止日} 截止', body: '{稱呼}學姐好，{課名}的輔導作業還有 {剩餘天數} 天截止。\n先把想討論的重點整理好，諮詢時就能聊得更深入🤍' },
+      last: { title: '輔導作業今天截止', body: '{稱呼}學姐，{課名}的輔導作業今天 {截止日} 23:59 截止。\n請學姐記得準時上傳，諮詢才能如期進行🥹🤍' }
+    },
+    corder: {
+      near: { title: '課後諮詢 {截止日} 前可預約', body: '{稱呼}學姐好，{課名}的課後諮詢可以預約到 {截止日}，還有 {剩餘天數} 天。\n趁印象還新，把上課的收穫帶來聊聊🤍' },
+      last: { title: '課後諮詢今天是最後預約日', body: '{稱呼}學姐，{課名}的課後諮詢預約到今天 {截止日}。\n想把握這次諮詢的話，今天記得完成預約🤍' }
+    },
+    plan: {
+      near: { title: '課表上的{課名}{截止日} 前下單', body: '{稱呼}學姐好，進修課表上的{課名}，下單截止是 {截止日}，還有 {剩餘天數} 天。\n照著課表一步一步來，節奏剛剛好🤍' },
+      last: { title: '{課名}今天是下單截止日', body: '{稱呼}學姐，進修課表上的{課名}今天 {截止日} 是下單截止日。\n記得在今天完成下單，課表就會穩穩往前🤍' }
+    },
+    level: {
+      far: { title: '{級別}級別到期日是 {截止日}', body: '{稱呼}學姐好🤍 學姐目前的{級別}級別到 {截止日}，還有 {剩餘天數} 天。\n想延續目前的學習權益，可以先看看級別權益，慢慢規劃就好🥰' },
+      near: { title: '{級別}級別還有 {剩餘天數} 天', body: '{稱呼}學姐，學姐的{級別}級別到 {截止日}。\n有想延續的權益，這週找個時間看一下級別權益表🤍' },
+      last: { title: '{級別}級別明天到期', body: '{稱呼}學姐，學姐的{級別}級別到 {截止日}。\n想延續目前的學習權益，可以在今天看看續等方式🤍' }
+    },
+    points: {
+      far: { title: '學姐還有 {點數} 點，到期日 {截止日}', body: '{稱呼}學姐好🤍 學姐帳號裡還有 {點數} 點，使用期限到 {截止日}，還有 {剩餘天數} 天。\n可以先挑幾堂想上的課，讓每一點都用在自己身上🥰' },
+      near: { title: '{點數} 點將在 {截止日} 到期', body: '{稱呼}學姐，學姐的 {點數} 點使用期限到 {截止日}。\n這週找個時間安排想上的課，點數就不會浪費🤍' },
+      last: { title: '{點數} 點明天到期', body: '{稱呼}學姐，學姐的 {點數} 點使用期限到 {截止日}。\n想延長使用期限的話，可以看看儲值方式🤍' }
+    },
+    ship: {
+      sent: { title: '學姐的包裹已寄出🤍', body: '{稱呼}學姐好🤍 學姐的{品項}已經寄出了。\n收到後點一下「確認收到」，讓學院知道包裹平安抵達🥰' },
+      remind: { title: '包裹收到了嗎？', body: '{稱呼}學姐好，{品項}寄出已經一週了。\n收到的話點一下「確認收到」；還沒收到或有任何狀況，點「回報包裹異常」，助教會馬上協助學姐🤍' }
+    },
+    schedule: {
+      sent: { title: '學姐的進修課表出爐了🎡', body: '{稱呼}學姐好🤍 校長為學姐排好的進修課表已經完成，共 {堂數} 堂，從 {起日} 到 {迄日}。\n每一堂的下單截止日都列在下方，照著節奏一步一步來就好🥰' }
+    },
+    merged: { title: '學姐有 {數量} 項期限要留意', body: '{稱呼}學姐好🤍 幫學姐整理了近期的期限，依日期由近到遠列在下方。\n先從最近的一項開始就好🤍' }
+  };
+  function stageOf(kind, left) {
+    if (kind === 'ship' || kind === 'schedule') return null;
+    if (left <= (kind === 'watch' || kind === 'level' || kind === 'points' ? 1 : 0)) return 'last';
+    if (kind === 'watch' && left >= 8) return 'far';
+    if ((kind === 'level' || kind === 'points') && left >= 15) return 'far';
+    return 'near';
+  }
+  function tpl(templates, kind, stage) {
+    var T = merge(TEMPLATES, templates || {});
+    var k = T[kind] || {};
+    return k[stage] || k.near || k.sent || k.remind || T.merged;
+  }
+  function render(s, vars) { return String(s || '').replace(/\{([^{}]+)\}/g, function (_, k) { return vars[k] != null ? String(vars[k]) : ''; }); }
+  function callName(name) { var n = String(name || '').trim(); if (!n) return ''; return n.length >= 3 ? n.slice(1) : n.length === 2 ? n : n; }
+  function num(v) { return Math.round(+v || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+  function hash(s) {   /* FNV-1a 64（兩段 32 位元）：卡片 id 與預覽簽章用；正式簽章在資料中心以 HMAC 產生 */
+    var h1 = 0x811c9dc5, h2 = 0x01000193; s = String(s);
+    for (var i = 0; i < s.length; i++) { var c = s.charCodeAt(i); h1 ^= c; h1 = Math.imul(h1, 16777619) >>> 0; h2 ^= c + i; h2 = Math.imul(h2, 2246822519) >>> 0; }
+    return ('00000000' + h1.toString(16)).slice(-8) + ('00000000' + h2.toString(16)).slice(-8);
+  }
+  /** 追蹤網址：go.html?l=<id>.<簽章>（新參數，不影響原有 t 參數） */
+  function trackedUrl(S, token) { return settingsOf(S).goBase + '?l=' + encodeURIComponent(token); }
+  function linkFor(item, S, member) {
+    S = settingsOf(S);
+    var k = KINDS[item.kind] || {};
+    if (item.kind === 'ship') return carrierUrl(item, S);
+    var tplUrl = S.links[k.link] || S.links.home, vars = item.vars || {};
+    /* 範本變數缺值（例如沒有課程 ID）時不組出殘缺網址，退回官網首頁 */
+    var missing = (String(tplUrl).match(/\{(\w+)\}/g) || []).some(function (m) { var v = vars[m.slice(1, -1)]; return v == null || v === ''; });
+    if (missing) return S.links.home;
+    var u = fillUrl(tplUrl, vars);
+    return SITE_RE.test(u) ? u : S.links.home;
+  }
+  function carrierUrl(ship, S) {
+    var c = (settingsOf(S).carriers || {})[ship.carrier] || {};
+    return c.url ? fillUrl(c.url, { no: ship.no }) : '';
+  }
+  /**
+   * 組卡：buildCard({ kind, items, member, S, now, sign(id,kind)→token, cardId, extra }) → card
+   *  card：{ id, kind, title, body, altText, rows, hero, button:{ label, img, url, tracked }, secondary, link, flex, to, trial }
+   *  sign 由呼叫端提供（資料中心用 HMAC；預覽用 hash），讓核心不需要密鑰
+   */
+  function buildCard(o) {
+    var S = settingsOf(o.S), now = parse(o.now != null ? o.now : Date.now()), m = o.member || {}, items = (o.items || []).slice().sort(function (a, b) { return parse(a.at) - parse(b.at); });
+    var first = items[0] || {}, kind = o.kind || first.kind, K = KINDS[kind] || KINDS.work;
+    var merged = items.length > 1;
+    var left = first.at ? daysLeft(first.at, now) : 0;
+    var stage = o.stage || (kind === 'ship' ? (o.extra && o.extra.reminder ? 'remind' : 'sent') : kind === 'schedule' ? 'sent' : stageOf(kind, left));
+    var T = merged ? merge(TEMPLATES, S.templates || {}).merged : tpl(S.templates, kind, stage);
+    var vars = { '稱呼': callName(m.name), '姓名': m.name || '', '課名': first.course || '', '截止日': fmtD(first.at), '剩餘天數': Math.max(0, left), '數量': items.length,
+      '級別': LEVELS[m.level] || '', '點數': num(m.points), '品項': (o.extra && o.extra.item) || '', '堂數': (o.extra && o.extra.count) || '', '起日': (o.extra && o.extra.from) || '', '迄日': (o.extra && o.extra.to) || '' };
+    var title = (o.title != null ? o.title : render(T.title, vars)).slice(0, 80);
+    var body = (o.body != null ? o.body : render(T.body, vars)).slice(0, 600);
+    var rows = (o.rows || items.map(function (it) {
+      var l = daysLeft(it.at, now);
+      return [KINDS[it.kind] ? KINDS[it.kind].name : '期限', (it.kind === 'level' ? LEVELS[m.level] + '級別' : it.kind === 'points' ? '剩餘 ' + num(m.points) + ' 點' : it.course || it.title), fmtD(it.at) + (l <= 0 ? '・今天' : '・剩 ' + l + ' 天')];
+    })).slice(0, 6);
+    var id = o.cardId || cardId(items.map(function (x) { return { id: x.id }; }));
+    var dest = kind === 'schedule' ? fillUrl(S.links.plan, {}) : kind === 'ship' ? '' : linkFor(first, S, m);
+    var sign = o.sign || function (cid, k) { return 'lm' + cid + (k ? '-' + k : '') + '.' + hash('preview.' + cid + k).slice(0, 12); };
+    var btnKey = kind === 'ship' ? 'ship' : (stage === 'last' ? K.btn1 : K.btn);
+    var btnLabel = BTN_LABEL[btnKey] || '查看詳情';
+    var button, secondary = null, link = null;
+    if (kind === 'ship') {
+      var ship = o.extra || {};
+      button = { label: '確認收到', img: S.assetBase + 'btn-ship.png', url: '（記錄確認收到的時間）', tracked: trackedUrl(S, sign(id, 'r')), kind: 'receipt' };
+      var cu = carrierUrl(ship, S);
+      secondary = { label: '查詢物流', url: cu || '（此物流商沒有查詢網址）', tracked: cu ? trackedUrl(S, sign(id, 'c')) : '', kind: 'carrier' };
+      var msg = '包裹異常回報｜單號 ' + (ship.no || '') + '\n異常類型：（未收到／破損／內容有誤／其他）\n說明：\n（可以直接附上照片）';
+      link = { label: '回報包裹異常', url: 'https://line.me/R/oaMessage/' + encodeURIComponent(S.oaId) + '/?' + encodeURIComponent(msg), tracked: '', kind: 'issue' };
+      rows = [['品項', ship.item || '', ''], ['物流商', (S.carriers[ship.carrier] || {}).name || ship.carrierName || '', ''], ['單號', ship.no || '', ''], ['寄出日', fmtD(ship.sent_at), '']];
+    } else {
+      button = { label: btnLabel, img: S.assetBase + 'btn-' + btnKey + '.png', url: dest, tracked: trackedUrl(S, sign(id, '')), kind: 'go' };
+    }
+    var hero = S.assetBase + (kind === 'schedule' ? 'hero-schedule-' + Math.max(0, Math.min(8, (o.extra && o.extra.lit) || 0)) + '.jpg' : kind === 'ship' ? 'hero-ship.jpg' : 'hero-deadline.jpg');
+    /* 測試發送：收件人由呼叫端指定（測試收件人），標題加「【測試】」，不走試營運改發預覽收件人 */
+    var rcpt = o.to ? { key: o.to.key || '', name: o.to.name || '', trial: false, test: true, original: m.name || '' } : recipientFor(m, S);
+    if (o.test) title = ('【測試】' + title).slice(0, 80);
+    var card = { id: id, kind: kind, stage: stage, title: title, body: body, rows: rows, hero: hero, button: button, secondary: secondary, link: link,
+      altText: (rcpt.trial ? '【試營運預覽】' : '') + title, to: rcpt, trial: !!rcpt.trial, test: !!o.test, mem_id: m.id, items: items.map(function (x) { return x.id; }), merged: merged };
+    card.flex = flexOf(card);
+    return card;
+  }
+  var BTN_LABEL = { watch: '從上次進度繼續', watch1: '立即觀看', work: '繼續作業', work0: '立即繳交', gwork: '開始作業', cwork: '前往諮詢專區', corder: '前往預約諮詢', plan: '前往下單', level: '查看級別權益', points: '前往儲值', schedule: '查看課表', ship: '確認收到', ship1: '確認收到' };
+  var C = { ink0: '#0C0A0B', ink1: '#110E0F', ink2: '#191516', t1: '#F6EFEA', t2: '#D8CEC8', t3: '#A0948F', rose: '#FF77B2', roseLine: '#FF2E8B', gold: '#D9B877', line: '#F6EFEA24' };
+  function txt(t, o) { var x = { type: 'text', text: String(t == null ? '' : t) || ' ', wrap: true }; for (var k in (o || {})) x[k] = o[k]; return x; }
+  function box(layout, contents, o) { var x = { type: 'box', layout: layout, contents: contents }; for (var k in (o || {})) x[k] = o[k]; return x; }
+  /** LINE Flex bubble（圖卡系列共用骨架：頂圖、膠囊、標題、引線、內文、明細框、票根、拼圖主按鈕、次按鈕、校名） */
+  function flexOf(c) {
+    var gold = c.kind === 'schedule';
+    var tone = gold ? C.gold : C.rose, toneLine = gold ? C.gold : C.roseLine;
+    var cap = c.kind === 'ship' ? '物流寄送' : c.kind === 'schedule' ? '進修課表' : '截止提醒';
+    var no = c.kind === 'ship' ? 'L9' : c.kind === 'schedule' ? 'L1' : 'L6';
+    var uri = function (label, u) { return { type: 'uri', label: label.slice(0, 20), uri: u }; };
+    var mainAct = c.button.tracked ? uri(c.button.label, c.button.tracked) : null;
+    var body = [
+      box('horizontal', [box('vertical', [txt(cap, { size: 'xxs', color: tone, weight: 'bold', align: 'center' })], { backgroundColor: tone + '24', cornerRadius: '999px', paddingAll: '4px', paddingStart: '10px', paddingEnd: '10px', flex: 0 }),
+        txt('No. ' + no, { size: 'xxs', color: C.t3, align: 'end', gravity: 'center' })]),
+      txt((c.trial ? '【試營運預覽】' : '') + c.title, { size: 'lg', weight: 'bold', color: C.t1, margin: 'lg' }),
+      box('vertical', [], { width: '36px', height: '2px', backgroundColor: toneLine, margin: 'md' }),
+      txt(c.body, { size: 'sm', color: C.t2, margin: 'lg', lineSpacing: '5px' })
+    ];
+    if ((c.trial || c.test) && c.to && c.to.original) body.push(txt((c.test ? '示範對象：' : '原收件人：') + c.to.original + ' 學姐', { size: 'xxs', color: C.t3, margin: 'md' }));
+    if (c.rows && c.rows.length) body.push(box('vertical', c.rows.map(function (r) {
+      return box('horizontal', [txt(r[0], { size: 'xs', color: C.t3, flex: 3 }), txt(r[1], { size: 'xs', color: C.t1, flex: 6, weight: 'bold' }), txt(r[2] || ' ', { size: 'xs', color: tone, flex: 4, align: 'end' })], { margin: 'sm' });
+    }), { margin: 'lg', paddingAll: '12px', cornerRadius: '10px', borderWidth: '1px', borderColor: toneLine + '52', backgroundColor: C.ink2 }));
+    var foot = [
+      box('horizontal', [txt(gold ? 'COURSE SCHEDULE' : c.kind === 'ship' ? 'SHIPPING' : 'DEADLINE REMINDER', { size: 'xxs', color: C.gold }), txt('No. ' + c.id.slice(1, 9).toUpperCase(), { size: 'xxs', color: C.gold, align: 'end' })], { paddingTop: '6px', paddingBottom: '6px', borderWidth: '1px', borderColor: '#D9B87740', cornerRadius: '2px', paddingStart: '8px', paddingEnd: '8px' }),
+      box('vertical', [{ type: 'image', url: c.button.img, size: 'full', aspectRatio: '4:1', aspectMode: 'fit', action: mainAct || undefined }], { margin: 'lg', action: mainAct || undefined })
+    ];
+    if (c.secondary && c.secondary.tracked) foot.push(box('vertical', [txt(c.secondary.label, { size: 'sm', color: C.t1, align: 'center', weight: 'bold' })], { margin: 'md', height: '40px', justifyContent: 'center', cornerRadius: '10px', borderWidth: '1px', borderColor: C.line, action: uri(c.secondary.label, c.secondary.tracked) }));
+    if (c.link) foot.push(txt(c.link.label + ' ›', { size: 'xs', weight: 'bold', color: tone, align: 'center', margin: 'md', action: uri(c.link.label, c.link.url) }));
+    foot.push(txt('G.R.A.C.E ACADEMY', { size: 'xxs', color: C.t3, align: 'center', margin: 'lg' }));
+    var bubble = {
+      type: 'bubble', size: 'mega',
+      hero: { type: 'image', url: c.hero, size: 'full', aspectRatio: '16:9', aspectMode: 'cover', action: mainAct || undefined },
+      body: box('vertical', body, { paddingAll: '20px' }),
+      footer: box('vertical', foot, { paddingAll: '16px' }),
+      styles: { hero: { backgroundColor: C.ink0 }, body: { backgroundColor: C.ink1 }, footer: { backgroundColor: C.ink2, separator: false } }
+    };
+    return [{ type: 'flex', altText: c.altText.slice(0, 380), contents: JSON.parse(JSON.stringify(bubble)) }];
+  }
+
+  /* ── 測試發送與每日摘要 ─────────────────────────────────── */
+  /** 測試用示範項目：這位學姐沒有該類別的真實項目時，以 3 天後截止的示範項目組卡 */
+  function sampleItem(kind, member, now) {
+    now = parse(now != null ? now : Date.now());
+    var m = member || {}, dl = iso(at(addDays(now, 3), '23:59'));
+    var course = { watch: '（示範課程）', work: '（示範課程）', gwork: '（示範私享專場）', cwork: '一對一諮詢', corder: '（示範課程）', plan: '（示範課表課程）', level: LEVELS[m.level] || '', points: '點數' }[kind] || '（示範）';
+    var title = { watch: course + ' 觀看期限', work: course + '｜課後作業', gwork: course + '｜入群前作業', cwork: '諮詢前置輔導作業', corder: course + '｜課後諮詢下單期限', plan: course + '｜課表下單截止', level: (LEVELS[m.level] || '') + ' 級別到期', points: '點數到期（餘 ' + num(m.points) + ' 點）' }[kind] || course;
+    if (kind === 'ship') return { id: 'sample:ship', kind: 'ship', l1: null, l2: null, mem_id: m.id, title: '（示範品項）｜SF0000000000', course: '（示範品項）', at: iso(now), ship: { item: '（示範品項）', carrier: 'sf', no: 'SF0000000000', sent_at: iso(now) }, sample: true };
+    return { id: 'sample:' + kind, kind: kind, l1: (KINDS[kind] || {}).l1, l2: '', l3: '', mem_id: m.id, title: title, course: course, at: dl, left: 3, done: false, doneReason: '', vars: { pro_id: 1, work_id: 1, counsel_id: 1 }, src: 'sample', sample: true };
+  }
+  /**
+   * 每日排程摘要（天使 OA 給校長）：sent[]＝{ kind, memberName }、skipped[]＝{ kind, memberName, reason }、off{kind:數}
+   */
+  function dailySummaryText(day, S, r) {
+    r = r || {};
+    var kn = function (k) { return KINDS[k] ? KINDS[k].name : k; };
+    var cnt = function (list) { var o = {}; (list || []).forEach(function (x) { o[x.kind] = (o[x.kind] || 0) + 1; }); return Object.keys(o).map(function (k) { return kn(k) + ' ' + o[k] + ' 則'; }).join('、'); };
+    var lines = ['【學院提醒摘要】' + fmtD(day) + (S && S.mode !== 'live' ? '（試營運）' : '')];
+    lines.push('已發送 ' + (r.sent || []).length + ' 則' + ((r.sent || []).length ? '：' + cnt(r.sent) : ''));
+    var sk = r.skipped || [];
+    if (sk.length) {
+      var by = {}; sk.forEach(function (x) { (by[x.reason] = by[x.reason] || []).push(x); });
+      lines.push('略過 ' + sk.length + ' 則：');
+      Object.keys(by).forEach(function (reason) { lines.push('・' + reason + '：' + cnt(by[reason])); });
+    } else lines.push('沒有略過的提醒');
+    var off = r.off || {}, offKeys = Object.keys(off).filter(function (k) { return off[k] > 0; });
+    if (offKeys.length) lines.push('未開啟自動提醒的類別（今天本可發出）：' + offKeys.map(function (k) { return kn(k) + ' ' + off[k] + ' 則'; }).join('、'));
+    if (r.note) lines.push(r.note);
+    lines.push('詳情：學院管理後台 › 通知 › 提醒排程');
+    return lines.join('\n');
+  }
+
+  /* ── 物流寄送 ─────────────────────────────────────────── */
+  /** 寄送項目轉成提醒項目：寄出後 7 天仍未確認收到時提醒一次；確認收到即完成 */
+  function shipItems(ships) {
+    return (ships || []).map(function (s) {
+      return { id: 'ship:' + s.id, kind: 'ship', l1: null, l2: null, mem_id: s.mem_id, title: s.item + '｜' + s.no, course: s.item, at: iso(s.sent_at), ship: s,
+        done: !!s.confirmed_at || !!s.issue_at, doneReason: s.confirmed_at ? '已確認收到' : s.issue_at ? '已回報異常（改由助教處理）' : '' };
+    });
+  }
+
+  /* ── 排課 ─────────────────────────────────────────────── */
+  var STAGE_NAMES = ['第一階段', '第二階段', '第三階段', '第四階段', '第五階段', '第六階段', '第七階段', '第八階段', '第九階段', '第十階段'];
+  var MAX_STAGES = 10;
+  var PICK_TABS = [{ key: 'main', name: '正課區' }, { key: 'case', name: '案例專區' }, { key: 'ai', name: 'AI 應用' }, { key: 'consult', name: '一對一諮詢' }];
+  var ZONE_MIN = { main: 4, ai: 4, consult: 4 };
+  function newSegment(now) { return { startMode: 'date', start: iso(at(addDays(now || Date.now(), 1), '23:59')), gap: 3, mode: 'every', every: 3, end: '', items: [] }; }
+  /**
+   * 每堂下單截止（日期＋時間）：
+   *  every＝每 N 天、range＝區間平均、after＝接續上一階段（上一階段最後一堂＋gap 天）；
+   *  單堂手動 manual：shift＝之後順延（以此為新基準）、solo＝只改這堂
+   */
+  function computeDates(segments) {
+    var prevLast = null;
+    return (segments || []).map(function (seg, si) {
+      var n = seg.items.length;
+      var hm = fmtT(seg.start || '') || '23:59';
+      var start = seg.startMode === 'after' && si > 0 && prevLast != null ? at(addDays(prevLast, +seg.gap || 0), hm) : parse(seg.start);
+      if (n && seg.items[0].manual) start = parse(seg.items[0].manual);
+      var every = Math.max(1, Math.min(60, +seg.every || 3));
+      var end = seg.mode === 'range' && seg.end ? parse(seg.end) : null;
+      var base = start, baseIdx = 0;
+      var items = seg.items.map(function (it, i) {
+        var auto = end != null && n > 1 ? at(start + Math.round(i * (startOfDay(end) - startOfDay(start)) / DAY / (n - 1)) * DAY, hm) : base + (i - baseIdx) * every * DAY;
+        var d = auto;
+        if (it.manual && i > 0) { d = parse(it.manual); if (it.manualMode !== 'solo' && end == null) { base = d; baseIdx = i; } }
+        var o = {}; for (var k in it) o[k] = it[k]; o.deadline = iso(d); o.auto = iso(auto); return o;
+      });
+      if (items.length) prevLast = parse(items[items.length - 1].deadline);
+      var s2 = {}; for (var k2 in seg) s2[k2] = seg[k2]; s2.items = items; s2.startAt = iso(start); return s2;
+    });
+  }
+  function flatItems(segments) {
+    var out = [], seq = 1;
+    computeDates(segments).forEach(function (seg, si) { seg.items.forEach(function (it) { var o = {}; for (var k in it) o[k] = it[k]; o.stage = si + 1; o.seq = seq++; out.push(o); }); });
+    return out;
+  }
+  /** 選課列狀態：上過（已購，看得到不能勾＋原因）、已排在其他階段、級別不足 🔒（可排）、可選 */
+  function rowState(p, ctx) {
+    var owned = ctx.owned || {}, lv = (ctx.member || {}).level || 1;
+    if (p.consult) {
+      var el = consultEligible(p, ctx);
+      if (lv < 4) return { key: 'lock', label: '級別需至尊以上才能下單（仍可排入）', disabled: false, lock: true, reasons: el.reasons };
+      return el.ok ? { key: 'ok', label: '可選', disabled: false } : { key: 'warn', label: el.reasons.join('、'), disabled: false, warn: true, reasons: el.reasons };
+    }
+    if (owned[p.id]) return { key: 'owned', label: '已上過（' + fmtD(owned[p.id]) + ' 購買），不能重複排', disabled: true };
+    var segs = ctx.segments || [];
+    for (var i = 0; i < segs.length; i++) if (i !== ctx.stageIdx && segs[i].items.some(function (it) { return !it.consult && it.ref === p.id; })) return { key: 'staged', label: '已排在' + STAGE_NAMES[i], disabled: true };
+    var need = p.min_level || ZONE_MIN[p.zone] || 2;
+    if (lv < need) return { key: 'lock', label: '級別需' + LEVELS[need] + '以上才能下單（仍可排入）', disabled: false, lock: true };
+    return { key: 'ok', label: '可選', disabled: false };
+  }
+  /** 諮詢資格：課後輔導需正課 N／C 作業通過且在課後諮詢下單期限內；案例指導需案例專區購買；AI 策略調整需 AI 教學包 */
+  function consultEligible(c, ctx) {
+    var out = { ok: true, reasons: [] }, owned = ctx.owned || {}, prods = ctx.productsById || {}, works = ctx.works || [], now = parse(ctx.now || Date.now());
+    if (c.rule === 'after') {
+      var mains = Object.keys(owned).filter(function (id) { return prods[id] && prods[id].zone === 'main'; });
+      if (!mains.length) { out.ok = false; out.reasons.push('需持有正課'); }
+      else {
+        var passed = mains.some(function (id) { var ws = works.filter(function (w) { return String(w.pro_id) === String(id) && (w.work_type === 'N' || w.work_type === 'C'); }); return ws.length && ws.every(function (w) { return w.status === 'Y'; }); });
+        if (!passed) { out.ok = false; out.reasons.push('正課課後作業與輔導單需審核通過'); }
+        else if (!works.some(function (w) { return w.counsel_deadline_at && parse(w.counsel_deadline_at) >= now; })) { out.ok = false; out.reasons.push('課後諮詢下單期限已過'); }
+      }
+    }
+    if (c.rule === 'case' && !Object.keys(owned).some(function (id) { return prods[id] && prods[id].zone === 'case'; })) { out.ok = false; out.reasons.push('需有案例專區購買紀錄'); }
+    if (c.rule === 'ai' && !Object.keys(owned).some(function (id) { return prods[id] && prods[id].zone === 'ai'; })) { out.ok = false; out.reasons.push('需先購買 AI 教學包'); }
+    return out;
+  }
+  function priceFor(p, level) { if (!p) return 0; if (p.point_levels && p.point_levels[level] != null) return +p.point_levels[level]; return +p.points || 0; }
+  /** 規則提醒（只提醒不阻擋）：點數不足、超過級別到期、超過點數（課費）到期、第一堂早於今天、諮詢資格不符 */
+  function checkPlan(member, segments, ctx) {
+    ctx = ctx || {};
+    var now = parse(ctx.now != null ? ctx.now : Date.now()), items = flatItems(segments), alerts = [], byId = ctx.productsById || {};
+    if (!items.length) return [{ level: 'err', key: 'empty', text: '課表還沒有任何一堂' }];
+    var total = items.reduce(function (a, it) { return a + (it.consult ? (+it.points || 0) : priceFor(byId[it.ref], member.level)); }, 0);
+    if (total > (+member.points || 0)) alerts.push({ level: 'warn', key: 'points', text: '點數不足：合計 ' + num(total) + ' 點，餘額 ' + num(member.points) + ' 點，差 ' + num(total - member.points) + ' 點' });
+    var last = items.reduce(function (m, x) { return parse(x.deadline) > parse(m.deadline) ? x : m; }, items[0]);
+    var first = items.reduce(function (m, x) { return parse(x.deadline) < parse(m.deadline) ? x : m; }, items[0]);
+    if (member.expired_at && parse(last.deadline) > parse(member.expired_at)) alerts.push({ level: 'warn', key: 'lvexp', text: '最後一堂（' + fmtD(last.deadline) + '）超過級別到期 ' + fmtD(member.expired_at) });
+    if (member.point_expired_at && parse(last.deadline) > parse(member.point_expired_at)) alerts.push({ level: 'warn', key: 'pexp', text: '最後一堂（' + fmtD(last.deadline) + '）超過課費（點數）到期 ' + fmtD(member.point_expired_at) });
+    if (startOfDay(first.deadline) < startOfDay(now)) alerts.push({ level: 'err', key: 'past', text: '第一堂（' + fmtD(first.deadline) + '）早於今天' });
+    var lock = items.filter(function (it) { return !it.consult && byId[it.ref] && (member.level || 1) < (byId[it.ref].min_level || ZONE_MIN[byId[it.ref].zone] || 2); });
+    if (lock.length) alerts.push({ level: 'warn', key: 'level', text: lock.length + ' 堂目前級別沒有購課資格（仍可排入）' });
+    var cs = items.filter(function (it) { return it.consult; });
+    var bad = cs.filter(function (it) { return !consultEligible(it.consultType || {}, ctx).ok || (member.level || 1) < 4; });
+    if (bad.length) alerts.push({ level: 'warn', key: 'consult', text: bad.length + ' 堂一對一諮詢資格不符：' + bad.map(function (it) { var r = consultEligible(it.consultType || {}, ctx).reasons; if ((member.level || 1) < 4) r = ['級別需至尊以上'].concat(r); return it.name + '（' + r.join('、') + '）'; }).join('；') });
+    if (cs.length) alerts.push({ level: 'info', key: 'cnote', text: cs.length + ' 堂一對一諮詢不寫入官網課表，由助教追蹤期限內是否完成預約' });
+    return alerts;
+  }
+  /** 寫回工單內容：POST /api/admin/study-plans、POST /api/admin/study-plans/tasks（只含課程堂） */
+  function writebackRequests(member, segments) {
+    var items = flatItems(segments).filter(function (i) { return !i.consult; });
+    return [{ method: 'POST', path: '/api/admin/study-plans', body: { member_id: member.id } }].concat(items.map(function (it) {
+      return { method: 'POST', path: '/api/admin/study-plans/tasks', body: { plan_id: '{上一步回應的 id}', member_id: member.id, product_id: it.ref, order_deadline: iso(it.deadline).slice(0, 19).replace('T', ' ') } };
+    }));
+  }
+  /** 備案文字：學姐公告版、後台輸入版 */
+  function textOutputs(segments, ctx) {
+    var items = flatItems(segments), S = settingsOf(ctx && ctx.S), byId = (ctx && ctx.productsById) || {};
+    var a = items.map(function (it) {
+      return it.consult ? '一對一諮詢｜' + it.name + ' ' + fmtD(it.deadline) + ' 前完成預約\n' + S.links.corder
+        : it.name + ' ' + fmtD(it.deadline) + ' ' + fmtT(it.deadline) + ' 前下單\n' + SITE + '/product/show/' + it.ref;
+    }).join('\n\n');
+    var cs = items.filter(function (it) { return it.consult; });
+    var b = items.filter(function (it) { return !it.consult; }).map(function (it) { var p = byId[it.ref] || {}; return (p.zone === 'main' ? '正課區' : (p.series || p.l2 || zoneName(p.zone))) + '｜' + it.name + '｜' + fmtD(it.deadline) + ' ' + fmtT(it.deadline); }).join('\n') +
+      (cs.length ? '\n\n（以下不寫入官網課表，助教追蹤）\n' + cs.map(function (it) { return '一對一諮詢｜' + it.name + '｜' + fmtD(it.deadline) + ' 前預約'; }).join('\n') : '');
+    return { announce: a, backend: b };
+  }
+  /** 上一版未完成的堂：逐堂選擇延續（帶入新課表）或取消 */
+  function carryOver(prevItems, choices) {
+    var keep = [], cancel = [];
+    (prevItems || []).forEach(function (it) { (choices && choices[it.key] === 'keep' ? keep : cancel).push(it); });
+    return { keep: keep, cancel: cancel };
+  }
+
+  /* ── 學習地圖 ─────────────────────────────────────────── */
+  /** 依「專區 › 第二層」分組；每門課 { id, name, seq, status, date }；status：done 已完成、going 進行中、late 逾期、owned 已購、none 未購 */
+  function learningMap(products, ownedRows, works, now) {
+    now = parse(now != null ? now : Date.now());
+    var owned = {}; (ownedRows || []).forEach(function (r) { if (!owned[r.pro_id] || parse(r.created_at) < parse(owned[r.pro_id].created_at)) owned[r.pro_id] = r; });
+    var W = {}; (works || []).forEach(function (w) { if (w.mem_work_id) (W[w.pro_id] = W[w.pro_id] || []).push(w); });
+    var zones = {};
+    (products || []).forEach(function (p) {
+      if (p.status === 'N' && !owned[p.id]) return;
+      var z = p.zone || 'other';
+      var key = z === 'main' ? p.l2 : (p.series || p.l2);
+      zones[z] = zones[z] || {};
+      var g = zones[z][key] = zones[z][key] || [];
+      var o = owned[p.id], ws = W[p.id] || [];
+      var st = 'none', date = '';
+      if (o) {
+        date = o.created_at;
+        var allDone = ws.length && ws.every(function (w) { return w.status === 'Y'; });
+        var late = ws.some(function (w) { return !w.upload_at && w.deadline_at && parse(w.deadline_at) < now; });
+        var exp = o.expired_at && parse(o.expired_at) < now;
+        st = allDone ? 'done' : late ? 'late' : exp && !ws.length ? 'done' : ws.length ? 'going' : 'owned';
+      }
+      g.push({ id: p.id, name: p.name, seq: p.seq, status: st, date: date, expired_at: o ? o.expired_at : '' });
+    });
+    return ZONES.filter(function (z) { return zones[z.key]; }).map(function (z) {
+      var rows = Object.keys(zones[z.key]).map(function (k) {
+        var list = zones[z.key][k].sort(function (a, b) { return (a.seq || 0) - (b.seq || 0) || String(a.name).localeCompare(String(b.name)); });
+        return { name: k, courses: list, owned: list.filter(function (x) { return x.status !== 'none'; }).length, total: list.length };
+      }).sort(function (a, b) { return b.owned - a.owned || a.name.localeCompare(b.name); });
+      return { key: z.key, name: z.name, rows: rows, owned: rows.reduce(function (a, r) { return a + r.owned; }, 0), total: rows.reduce(function (a, r) { return a + r.total; }, 0) };
+    });
+  }
+  /** 作業準時率：準時（截止前上傳）、逾時（截止後上傳）、逾期（過了截止仍未上傳） */
+  function homeworkRing(works, now) {
+    now = parse(now != null ? now : Date.now());
+    var r = { ontime: [], late: [], overdue: [], open: [] };
+    (works || []).forEach(function (w) {
+      if (!w.mem_work_id || !w.deadline_at) return;
+      if (w.upload_at) (parse(w.upload_at) <= parse(w.deadline_at) ? r.ontime : r.late).push(w);
+      else (parse(w.deadline_at) < now ? r.overdue : r.open).push(w);
+    });
+    return r;
+  }
+  /** 活躍度（0–100）：近 30 天購課、作業上傳、通知點擊加權；沉睡＝60 天沒有任何紀錄 */
+  function activity(m, rows, now) {
+    now = parse(now != null ? now : Date.now());
+    var since = now - 30 * DAY, ev = [];
+    (rows.works || []).forEach(function (w) { if (parse(w.created_at) >= since) ev.push({ t: w.created_at, what: '購課', name: w.pro_name || '', w: 12 }); if (w.upload_at && parse(w.upload_at) >= since) ev.push({ t: w.upload_at, what: '上傳作業', name: w.work_title || '', w: 10 }); });
+    (rows.clicks || []).forEach(function (c) { if (parse(c.clickAt) >= since) ev.push({ t: c.clickAt, what: '點擊通知', name: c.title || '', w: 4 }); });
+    if (m.last_login && parse(m.last_login) >= since) ev.push({ t: m.last_login, what: '登入官網', name: '', w: 8 });
+    var score = Math.min(100, ev.reduce(function (a, e) { return a + e.w; }, 0));
+    var lastAny = [m.last_login].concat((rows.works || []).map(function (w) { return w.upload_at || w.created_at; })).map(parse).filter(function (x) { return !isNaN(x); });
+    var last = lastAny.length ? Math.max.apply(null, lastAny) : NaN;
+    var tier = isNaN(last) || now - last > 60 * DAY ? '沉睡' : score >= 60 ? '亮眼' : score >= 25 ? '穩定' : '待喚醒';
+    return { score: score, tier: tier, events: ev.sort(function (a, b) { return parse(b.t) - parse(a.t); }) };
+  }
+
+  return {
+    VERSION: VERSION, DAY: DAY, HOUR: HOUR, LEVELS: LEVELS, ZONES: ZONES, TAXONOMY: TAXONOMY, KINDS: KINDS, AUTO_KINDS: AUTO_KINDS, CONSULT_TYPES: CONSULT_TYPES, WORK_TYPES: WORK_TYPES, DEFAULTS: DEFAULTS, TEMPLATES: TEMPLATES, BTN_LABEL: BTN_LABEL,
+    SITE_RE: SITE_RE, CARRIER_RE: CARRIER_RE, STAGE_NAMES: STAGE_NAMES, MAX_STAGES: MAX_STAGES, PICK_TABS: PICK_TABS,
+    parse: parse, fmtD: fmtD, fmtDT: fmtDT, fmtT: fmtT, iso: iso, dayKey: dayKey, weekKey: weekKey, startOfDay: startOfDay, at: at, addDays: addDays, daysLeft: daysLeft, inQuiet: inQuiet, quietRelease: quietRelease,
+    merge: merge, settingsOf: settingsOf, autoOn: autoOn, fillUrl: fillUrl, urlIssue: urlIssue, hash: hash, num: num, callName: callName, render: render,
+    kindIndex: kindIndex, productInfo: productInfo, zoneName: zoneName, openDaysFor: openDaysFor, levelAt: levelAt, watchExpiry: watchExpiry,
+    collect: collect, inRange: inRange, tree: tree, personalFor: personalFor, itemNodes: itemNodes, planReminders: planReminders, recheck: recheck, manualTiming: manualTiming, recipientFor: recipientFor,
+    stageOf: stageOf, buildCard: buildCard, flexOf: flexOf, trackedUrl: trackedUrl, linkFor: linkFor, carrierUrl: carrierUrl, shipItems: shipItems, sampleItem: sampleItem, dailySummaryText: dailySummaryText,
+    newSegment: newSegment, computeDates: computeDates, flatItems: flatItems, rowState: rowState, consultEligible: consultEligible, priceFor: priceFor, checkPlan: checkPlan,
+    writebackRequests: writebackRequests, textOutputs: textOutputs, carryOver: carryOver, learningMap: learningMap, homeworkRing: homeworkRing, activity: activity
+  };
+});
+
+var LMS_CORE = this.LMS_CORE || globalThis.LMS_CORE;
+/* ── 嵌入結束 ── */
+
+/* ── 截止總覽 ─────────────────────────────────────────── */
+function lmsItems_(includeDone) {
+  var key = includeDone ? 'all' : 'open';
+  if (LMS_CACHE['items_' + key]) return LMS_CACHE['items_' + key];
+  var items = LMS_CORE.collect(lmsDb_(), { now: Date.now(), includeDone: !!includeDone }).concat(LMS_CORE.shipItems(lmsRows_('ships')).filter(function (x) { return includeDone || !x.done; }));
+  LMS_CACHE['items_' + key] = items;
+  return items;
+}
+function lmsPausedMap_() { var o = {}; lmsRows_('paused').forEach(function (p) { o[p.id] = p; }); return o; }
+function lmsPlan_(items) {
+  return LMS_CORE.planReminders(items, { S: lmsSettings_(), now: Date.now(), personal: lmsRows_('personal'), log: lmsRows_('log'), paused: lmsPausedMap_() });
+}
+function lmsMemberLite_(id) { var m = lmsGet_('members', id); return m ? { id: m.id, name: m.name, level: m.level, key: m.key, points: m.points, expired_at: m.expired_at, point_expired_at: m.point_expired_at } : { id: id, name: '（未同步）' }; }
+/** lms_deadlines { days } → { items（含提醒節點）, members（名稱對照）, sync } */
+function lmsDeadlines_(req) {
+  var days = Math.max(0, Math.min(60, Number(req.days) || 30)), now = Date.now();
+  var all = lmsItems_(false), plan = lmsPlan_(all);
+  var items = all.filter(function (x) { return x.kind !== 'ship' && LMS_CORE.inRange(x, days, now); }).map(function (x) { var o = {}; for (var k in x) o[k] = x[k]; o.nodes = plan.nodes[x.id] || []; return o; });
+  var ids = {}; items.forEach(function (x) { ids[x.mem_id] = 1; });
+  var members = {}; Object.keys(ids).forEach(function (id) { members[id] = lmsMemberLite_(id); });
+  return { items: items, members: members, days: days, sync: lmsSyncState_() };
+}
+/** lms_member { id } → 學姐檔案：購課、作業、截止項目（含已完成）、提醒節點、個人節點、通知與點擊、寄送 */
+function lmsMember_(req) {
+  var id = Number(req.id), db = lmsDb_();
+  var m = lmsGet_('members', id); if (!m) throw apiError('找不到這位學姐（請先同步）', 'ERR_NOT_FOUND');
+  var works = db.works.filter(function (w) { return Number(w.mem_id) === id; });
+  var items = lmsItems_(true).filter(function (x) { return Number(x.mem_id) === id; });
+  var plan = lmsPlan_(items.filter(function (x) { return !x.done; }).concat(items.filter(function (x) { return x.done; })));
+  items.forEach(function (x) { x.nodes = plan.nodes[x.id] || []; });
+  var log = lmsRows_('log').filter(function (c) { return Number(c.mem_id) === id; });
+  return { member: m, works: works, cworks: db.cworks.filter(function (c) { return Number(c.mem_id) === id; }), counsels: db.counsels.filter(function (c) { return Number(c.mem_id) === id; }),
+    sitePlans: db.plans.filter(function (p) { return Number(p.mem_id) === id; }), plans: lmsRows_('plans').filter(function (p) { return Number(p.mem_id) === id; }),
+    items: items, personal: lmsRows_('personal').filter(function (p) { return Number(p.mem_id) === id; }), log: log, ships: lmsRows_('ships').filter(function (s) { return Number(s.mem_id) === id; }),
+    bound: lmsBound_(m.key) };
+}
+
+/* ── 佇列、預覽 ─────────────────────────────────────────── */
+/** lms_queue { days, includeOff? } → 自動提醒（未來 days 天）＋手動排定，含每張圖卡的完整預覽；includeOff 時連「類別未開啟」的卡一起回（off:true，提醒排程頁用） */
+function lmsQueue_(req) {
+  var days = Math.max(1, Math.min(45, Number(req.days) || 14)), S = lmsSettings_(), now = Date.now();
+  var items = lmsItems_(false), plan = lmsPlan_(items), IT = {}; items.forEach(function (x) { IT[x.id] = x; });
+  var checks = {}; lmsRows_('checks').forEach(function (c) { checks[c.id] = c; });
+  var mk = function (c) {
+    var card = lmsCardFor_(c.items.map(function (i) { return IT[i]; }), c.id, S);
+    card.sendAt = c.sendAt; card.nodes = c.nodes; card.source = 'auto'; card.check = checks[c.id] || null; card.off = !!c.off;
+    card.nodeInfo = c.nodes.map(function (nid) { var n = (plan.nodes[nid.split('|')[0]] || []).filter(function (x) { return x.id === nid; })[0]; return n ? { id: n.id, src: n.src, days: n.days } : { id: nid }; });
+    return card;
+  };
+  var inDays = function (c) { return LMS_CORE.parse(c.sendAt) <= now + days * 86400000; };
+  var auto = plan.cards.filter(inDays).map(mk);
+  var off = req.includeOff ? (plan.offCards || []).filter(inDays).map(mk) : [];
+  var manual = lmsRows_('queue').filter(function (q) { return q.status === 'scheduled'; }).map(function (q) { var c = q.card; c.sendAt = q.sendAt; c.source = 'manual'; c.queueId = q.id; c.check = checks[c.id] || null; return c; });
+  var paused = lmsRows_('paused');
+  return { cards: manual.concat(auto), offCards: off, paused: paused, settings: { mode: S.mode, previewKey: S.previewKey, weeklyCap: S.weeklyCap, quiet: S.quiet, autoKinds: S.autoKinds, autoSend: S.autoSend !== false } };
+}
+/** lms_schedule { days } → 未來 N 天每天會自動發出的提醒（含類別未開啟者），給提醒排程頁 */
+function lmsSchedule_(req) {
+  var days = Math.max(1, Math.min(30, Number(req.days) || 14));
+  var q = lmsQueue_({ days: days, includeOff: true });
+  var all = q.cards.concat(q.offCards), byDay = {};
+  all.forEach(function (c) { var k = LMS_CORE.dayKey(c.sendAt); (byDay[k] = byDay[k] || []).push(c); });
+  var out = []; for (var i = 0; i <= days; i++) { var k = LMS_CORE.dayKey(LMS_CORE.addDays(Date.now(), i)); out.push({ day: k, cards: (byDay[k] || []).sort(function (a, b) { return String(a.sendAt).localeCompare(String(b.sendAt)); }) }); }
+  return { days: out, settings: q.settings, summary: { dailySummary: lmsSettings_().dailySummary !== false, lastSummary: (lmsGet_('sync_runs', 'daily') || {}).lastSummary || '' } };
+}
+function lmsSign_(cardId, kind) { return 'lm' + cardId + (kind ? '-' + kind : '') + '.' + hmacHex('lms.' + cardId + '.' + (kind || '')).slice(0, 12); }
+function lmsCardFor_(items, cardId, S, override) {
+  items = items.filter(Boolean);
+  var m = lmsGet_('members', items[0].mem_id) || { id: items[0].mem_id, name: '' };
+  var o = { items: items, member: m, S: S, now: Date.now(), cardId: cardId, sign: lmsSign_ };
+  /* 寄送：自動節點＝寄出 7 天後的「包裹收到了嗎？」；手動建立後的第一張＝寄出通知（override.reminder 為 false） */
+  if (items[0].kind === 'ship') { o.kind = 'ship'; o.extra = JSON.parse(JSON.stringify(items[0].ship || {})); o.extra.reminder = override ? !!override.reminder : true; }
+  if (override) { if (override.title) o.title = override.title; if (override.body) o.body = override.body; }
+  var card = LMS_CORE.buildCard(o);
+  card.memberName = m.name;
+  card.bound = lmsBound_(card.to.key);
+  return card;
+}
+/**
+ * lms_preview { memId, itemIds, title?, body? } → { card, warnings, timing }
+ *  手動提醒：預覽時重新檢查是否已完成（顯示警示），並回報安靜時段處理方式
+ */
+function lmsPreview_(req, me) {
+  var S = lmsSettings_(), all = lmsItems_(true), F = {}; all.forEach(function (x) { F[x.id] = x; });
+  var ids = (req.itemIds || []).map(String);
+  var items = ids.map(function (i) { return F[i]; }).filter(Boolean);
+  if (!items.length) throw apiError('找不到要提醒的項目（可能已同步移除）', 'ERR_NOT_FOUND');
+  var warnings = [];
+  items.forEach(function (x) { if (x.done) warnings.push('「' + x.title + '」已完成：' + x.doneReason); });
+  var card = lmsCardFor_(items, req.cardId || ('m' + LMS_CORE.hash(ids.join(',') + Utilities.getUuid()).slice(0, 11)), S, { title: req.title, body: req.body, reminder: !!req.reminder });
+  if (!card.to.key) warnings.push(S.mode === 'live' ? '這位學姐沒有名冊鍵，無法發送' : '尚未設定校長預覽收件人（設定頁 › 試營運）');
+  else if (card.bound !== 'ok') warnings.push('收件人尚未對應 LINE 或無法送達');
+  return { card: card, warnings: warnings, timing: LMS_CORE.manualTiming(Date.now(), S, false), mode: S.mode };
+}
+
+/* ── 測試發送（給校長與助教，用 @52grace 發） ───────────── */
+function lmsTestRecipients_(S) {
+  return (S.testRecipients || []).map(function (r) { var b = lmsBound_(r.key); return { role: r.role, key: r.key, name: r.name, bound: b }; });
+}
+/** 測試對象的項目：有真實項目用真實的（itemId），沒有就用該類別的示範項目 */
+function lmsTestItems_(req) {
+  var kind = String(req.kind || ''); if (!LMS_CORE.KINDS[kind]) throw apiError('不支援的提醒類別：' + kind, 'ERR_VALIDATION');
+  var mem = lmsGet_('members', req.memId);
+  /* memId 0：名冊還沒同步時，以第一位測試收件人本人作為示範對象（只用名字與名冊鍵） */
+  if (!mem && Number(req.memId) === 0) { var r0 = (lmsSettings_().testRecipients || [])[0]; if (!r0) throw apiError('請先在設定頁選擇測試收件人', 'ERR_VALIDATION'); mem = { id: 0, key: r0.key, name: r0.name, level: 4, points: 0, expired_at: '', point_expired_at: '' }; }
+  if (!mem) throw apiError('請先選擇示範對象的學姐', 'ERR_VALIDATION');
+  var all = lmsItems_(true), real = req.itemId ? all.filter(function (x) { return x.id === String(req.itemId) && Number(x.mem_id) === Number(mem.id); })[0] : null;
+  if (req.itemId && !real) throw apiError('找不到這個項目（可能已同步移除）', 'ERR_NOT_FOUND');
+  var item = real || LMS_CORE.sampleItem(kind, mem, Date.now());
+  return { kind: kind, member: mem, item: item, candidates: all.filter(function (x) { return x.kind === kind && Number(x.mem_id) === Number(mem.id) && !x.done; }).map(function (x) { return { id: x.id, title: x.title, at: x.at, left: x.left }; }) };
+}
+function lmsTestCard_(t, S, rcpt, override) {
+  var o = { items: [t.item], member: t.member, S: S, now: Date.now(), cardId: 't' + LMS_CORE.hash(t.item.id + '|' + rcpt.key + '|' + Date.now()).slice(0, 11), sign: lmsSign_, to: { key: rcpt.key, name: rcpt.name }, test: true };
+  if (t.kind === 'ship') { o.kind = 'ship'; o.extra = JSON.parse(JSON.stringify(t.item.ship || {})); o.extra.reminder = false; }
+  if (override) { if (override.title) o.title = override.title; if (override.body) o.body = override.body; }
+  var card = LMS_CORE.buildCard(o); card.memberName = t.member.name; card.bound = rcpt.bound || lmsBound_(rcpt.key);
+  return card;
+}
+/** lms_test_preview { kind, memId, itemId?, title?, body? } → { card, recipients, candidates, warnings } */
+function lmsTestPreview_(req, me) {
+  var S = lmsSettings_(), t = lmsTestItems_(req), rc = lmsTestRecipients_(S), warnings = [];
+  if (!rc.length) warnings.push('尚未設定測試收件人（設定頁 › 測試收件人）');
+  rc.forEach(function (r) { if (r.bound !== 'ok') warnings.push((r.role === 'assistant' ? '助教' : '校長') + '（' + r.name + '）尚未綁定 @52grace，收不到測試'); });
+  var first = rc[0] || { key: '', name: '（尚未設定測試收件人）' };
+  var card = lmsTestCard_(t, S, first, { title: req.title, body: req.body });
+  if (t.item.sample) warnings.push('這位學姐沒有「' + LMS_CORE.KINDS[t.kind].name + '」的進行中項目，以示範項目組卡');
+  return { card: card, recipients: rc, candidates: t.candidates, sample: !!t.item.sample, warnings: warnings };
+}
+/** lms_test_send { kind, memId, itemId?, title?, body? }：只發給測試收件人（已綁定者），標題加【測試】，不計入每週上限 */
+function lmsTestSend_(req, me) {
+  var S = lmsSettings_(), t = lmsTestItems_(req), rc = lmsTestRecipients_(S).filter(function (r) { return r.bound === 'ok'; });
+  if (!rc.length) throw apiError('沒有已綁定 @52grace 的測試收件人', 'ERR_VALIDATION');
+  var meta = [], messages = [];
+  rc.forEach(function (r) {
+    var card = lmsTestCard_(t, S, r, { title: req.title, body: req.body });
+    messages.push({ key: r.key, name: r.name, text: card.altText, flex: card.flex, tooLong: false });
+    meta.push({ card: card, sp: { nodes: [], test: true }, skipped: [] });
+  });
+  var out = lmsPushCards_(meta, messages, me, { manual: true, test: true });
+  return { sent: out.sent, results: out.results, recipients: rc.map(function (r) { return { role: r.role, name: r.name }; }) };
+}
+
+/* ── 發送 ─────────────────────────────────────────────── */
+/**
+ * lms_send { cards:[{ memId, itemIds, title?, body?, cardId? }] | cardIds:[自動佇列的卡 id], force?, defer?, queueIds? }
+ *  發送前一律以最新同步資料重新檢查（已完成的項目自動略過並記錄原因）；試營運只發校長預覽收件人
+ *  安靜時段：未 force → 排到 09:00（新的一次性觸發器 lmsDeferredRun）；force（校長）→ 立即
+ */
+function lmsSend_(req, me) {
+  var S = lmsSettings_(), now = Date.now();
+  var timing = LMS_CORE.manualTiming(now, S, !!req.force);
+  if (req.force && me.role !== 'principal') throw apiError('只有校長可以在安靜時段強制發送', 'ERR_FORBIDDEN');
+  var specs = lmsSendSpecs_(req);
+  if (!specs.length) throw apiError('沒有要發送的圖卡', 'ERR_VALIDATION');
+  if (timing.quiet && !timing.forced) {
+    var q = specs.map(function (sp) { var card = lmsCardFor_(sp.items, sp.cardId, S, sp.override); return { id: 'q' + LMS_CORE.hash(card.id + now).slice(0, 11), status: 'scheduled', sendAt: timing.sendAt, by: me.email, at: nowIso(), spec: { itemIds: sp.items.map(function (x) { return x.id; }), cardId: sp.cardId, override: sp.override, nodes: sp.nodes }, card: card }; });
+    lmsPut_('queue', q);
+    lmsDeferTrigger_(timing.sendAt);
+    return { deferred: true, sendAt: timing.sendAt, count: q.length };
+  }
+  return lmsDeliver_(specs, S, me, { manual: !!req.manual });
+}
+function lmsSendSpecs_(req) {
+  var all = lmsItems_(true), F = {}; all.forEach(function (x) { F[x.id] = x; });
+  var specs = [];
+  (req.cards || []).forEach(function (c) { specs.push({ items: (c.itemIds || []).map(function (i) { return F[i]; }).filter(Boolean), cardId: c.cardId || ('m' + LMS_CORE.hash((c.itemIds || []).join(',') + Utilities.getUuid()).slice(0, 11)), override: { title: c.title, body: c.body, reminder: !!c.reminder }, nodes: [] }); });
+  if (req.cardIds && req.cardIds.length) {
+    var plan = lmsPlan_(lmsItems_(false)), want = {}; req.cardIds.forEach(function (i) { want[i] = 1; });
+    plan.cards.forEach(function (c) { if (want[c.id]) specs.push({ items: c.items.map(function (i) { return F[i]; }).filter(Boolean), cardId: c.id, override: null, nodes: c.nodes }); });
+  }
+  (req.queueIds || []).forEach(function (qid) { var q = lmsGet_('queue', qid); if (q && q.status === 'scheduled') specs.push({ items: q.spec.itemIds.map(function (i) { return F[i]; }).filter(Boolean), cardId: q.spec.cardId, override: q.spec.override, nodes: q.spec.nodes || [], queueId: q.id }); });
+  return specs.filter(function (s) { return s.items.length; });
+}
+/** 實際發送：重新檢查 → 組卡 → 共用 @52grace 發送函式（額度保護、Retry-Key、逐人結果）→ 紀錄 */
+function lmsDeliver_(specs, S, me, opt) {
+  opt = opt || {};
+  var fresh = lmsItems_(true), results = [], messages = [], meta = [];
+  specs.forEach(function (sp) {
+    var rc = LMS_CORE.recheck(sp.items.map(function (x) { return x.id; }), fresh);
+    if (!rc.keep.length) { results.push({ cardId: sp.cardId, ok: false, skipped: true, reason: rc.skip.map(function (s) { return s.reason; }).join('；') }); lmsSkipLog_(sp, rc.skip, me); return; }
+    var items = sp.items.filter(function (x) { return rc.keep.indexOf(x.id) >= 0; });
+    var card = lmsCardFor_(items, sp.cardId, S, sp.override);
+    if (!card.to.key) { results.push({ cardId: card.id, ok: false, reason: S.mode === 'live' ? '學姐沒有名冊鍵' : '尚未設定校長預覽收件人' }); return; }
+    var bad = LMS_CORE.urlIssue(card.button.url, false); if (card.kind !== 'ship' && bad) { results.push({ cardId: card.id, ok: false, reason: '按鈕網址' + bad }); return; }
+    messages.push({ key: card.to.key, name: card.to.name, text: card.altText, flex: card.flex, tooLong: false });
+    meta.push({ card: card, sp: sp, skipped: rc.skip });
+  });
+  var r = lmsPushCards_(meta, messages, me, opt);
+  return { sent: r.sent, results: results.concat(r.results), quota: r.quota };
+}
+/** 共用發送：meta[i]＝{ card, sp, skipped }、messages[i]＝{ key, name, text, flex }；額度保護一次檢查整批 */
+function lmsPushCards_(meta, messages, me, opt) {
+  opt = opt || {};
+  var results = [];
+  if (!messages.length) return { sent: 0, results: results };
+  if (typeof lineRequireConfigured === 'function') lineRequireConfigured();
+  var quota = lineQuota(true);
+  lineQuotaGuard_(quota, messages.length);   /* 3.3.7 額度保護（不足時整批不發） */
+  var at = nowIso(), logs = [], usedNow = 0;
+  meta.forEach(function (x, i) {
+    /* 逐張呼叫既有 linePushMessages（試營運時收件人都是校長，逐張才能對應每張卡的結果）；Retry-Key 以卡片 id 衍生，同卡重送不重複計費 */
+    var out = linePushMessages([messages[i]], function (m) { return 'lms.' + x.card.id + '.' + m.key; }, '');
+    usedNow += out.usedNow;
+    var fail = out.failed[0];
+    var c = x.card;
+    results.push({ cardId: c.id, ok: !fail, reason: fail ? fail.error : '', skippedItems: x.skipped });
+    if (!fail) logs.push({ id: c.id, mem_id: c.mem_id, memberName: c.memberName, kind: c.kind, title: c.title, body: c.body, rows: c.rows, items: c.items, nodes: x.sp.nodes || [], sentAt: at, by: me ? me.email : '系統（每日觸發器）',
+      to: c.to, trial: c.trial, test: !!c.test, url: c.button.url, tracked: c.button.tracked, secondary: c.secondary, link: c.link, hero: c.hero, btnImg: c.button.img, manual: !!opt.manual, counted: !c.trial && !c.test, clickAt: '', clicks: 0, planId: x.sp.planId || '' });
+    if (x.sp.queueId) { var q = lmsGet_('queue', x.sp.queueId); if (q) { q.status = fail ? 'failed' : 'sent'; q.result = fail ? fail.error : at; lmsPut_('queue', [q]); } }
+  });
+  if (typeof quotaAccount === 'function') quotaAccount('lms', usedNow);
+  lmsPut_('log', logs);
+  try { if (typeof chatLogAppend === 'function') chatLogAppend(logs.map(function (l) { return { key: l.to.key, dir: 'out', kind: 'lms', text: (l.trial ? '【試營運預覽】' : '') + l.title, ok: true }; })); } catch (e) { /* 對話紀錄失敗不影響發送 */ }
+  return { sent: logs.length, results: results, quota: typeof lineQuotaAfter_ === 'function' ? lineQuotaAfter_(quota, usedNow) : null };
+}
+function lmsSkipLog_(sp, skip, me) {
+  lmsPut_('log', [{ id: 'skip-' + sp.cardId + '-' + Date.now(), mem_id: sp.items[0] ? sp.items[0].mem_id : '', kind: sp.items[0] ? sp.items[0].kind : '', title: '略過：' + skip.map(function (s) { return s.reason; }).join('；'), items: skip.map(function (s) { return s.id; }), nodes: [], skipped: true, sentAt: '', at: nowIso(), by: me ? me.email : '系統' }]);
+}
+function lmsPause_(req, me) {
+  var id = String(req.id || ''); if (!id) throw apiError('缺少暫停對象', 'ERR_VALIDATION');
+  if (req.paused === false) { lmsDel_('paused', [id]); return { paused: false }; }
+  lmsPut_('paused', [{ id: id, by: me.email, at: nowIso(), reason: cleanText(req.reason).slice(0, 80) }]);
+  return { paused: true };
+}
+/** 助教已核對：記錄核對的人與時間 */
+function lmsCheck_(req, me) {
+  var id = String(req.id || ''); if (!id) throw apiError('缺少圖卡 id', 'ERR_VALIDATION');
+  if (req.checked === false) { lmsDel_('checks', [id]); return { checked: false }; }
+  var c = { id: id, by: me.email, name: me.name, at: nowIso() };
+  lmsPut_('checks', [c]);
+  return { checked: true, check: c };
+}
+function lmsLogList_(req) {
+  var rows = lmsRows_('log').filter(function (l) { return !l.skipped || req.withSkipped; });
+  rows.sort(function (a, b) { return String(b.sentAt || b.at).localeCompare(String(a.sentAt || a.at)); });
+  return { log: rows.slice(0, Math.min(500, Number(req.limit) || 200)) };
+}
+
+/* ── 個人提醒節點 ─────────────────────────────────────── */
+function lmsNodesGet_(req) { return { personal: lmsRows_('personal').filter(function (p) { return Number(p.mem_id) === Number(req.memId); }) }; }
+function lmsNodesSet_(req, me) {
+  var memId = Number(req.memId), scope = req.scope || {};
+  if (!memId || (!scope.item && !scope.kind)) throw apiError('請指定學姐與項目或類別', 'ERR_VALIDATION');
+  var nodes = (req.nodes || []).map(function (n) { return { days: Math.max(-60, Math.min(90, Number(n.days) || 0)), time: /^\d{2}:\d{2}$/.test(n.time || '') ? n.time : '' }; }).slice(0, 12);
+  var id = 'p' + memId + '-' + (scope.item || 'k:' + scope.kind);
+  lmsPut_('personal', [{ id: id, mem_id: memId, scope: { item: scope.item || '', kind: scope.item ? '' : scope.kind }, nodes: nodes, by: me.email, at: nowIso() }]);
+  return lmsNodesGet_({ memId: memId });
+}
+function lmsNodesReset_(req, me) { lmsDel_('personal', [String(req.id)]); return lmsNodesGet_({ memId: req.memId }); }
+
+/* ── 點擊紀錄（go.html?l=，免登入、簽章驗證） ───────────── */
+function lmsClick_(req) {
+  var t = String(req.l || '');
+  var m = /^lm([0-9A-Za-z]{6,24})(?:-([rc]))?\.([0-9a-f]{12})$/.exec(t);
+  if (!m) throw apiError('連結不完整', 'ERR_VALIDATION');
+  var cardId = m[1], kind = m[2] || '';
+  if (!constantEquals(hmacHex('lms.' + cardId + '.' + kind).slice(0, 12), m[3])) throw apiError('連結已失效', 'ERR_AUTH');
+  var log = lmsGet_('log', cardId);
+  if (!log) throw apiError('連結已失效', 'ERR_NOT_FOUND');
+  var at = nowIso();
+  lmsPut_('clicks', [{ id: cardId + '-' + kind + '-' + Date.now(), card: cardId, kind: kind || 'go', at: at, mem_id: log.mem_id }]);
+  if (!log.clickAt) log.clickAt = at;
+  log.clicks = (log.clicks || 0) + 1;
+  var url = log.url, msg = '';
+  if (kind === 'c') url = log.secondary && log.secondary.url;
+  if (kind === 'r') {
+    var sid = (log.items[0] || '').replace(/^ship:/, ''), ship = lmsGet_('ships', sid);
+    if (ship && !ship.confirmed_at && !log.trial) { ship.confirmed_at = at; lmsPut_('ships', [ship]); }
+    log.receiptAt = log.receiptAt || at;
+    url = lmsSettings_().links.home; msg = '已確認收到，謝謝學姐🤍';
+  }
+  lmsPut_('log', [log]);
+  if (!(LMS_CORE.SITE_RE.test(url || '') || (kind === 'c' && LMS_CORE.CARRIER_RE.test(url || '')))) throw apiError('連結已失效', 'ERR_NOT_FOUND');
+  return { url: url, msg: msg };
+}
+
+/* ── 物流寄送 ─────────────────────────────────────────── */
+function lmsShips_() { var r = lmsRows_('ships').slice(); r.sort(function (a, b) { return String(b.sent_at).localeCompare(String(a.sent_at)); }); return { ships: r }; }
+/** lms_ship_create { rows:[{ memId, item, carrier, no, sent_at }] }：建立寄送（不自動發卡，發送一律經預覽） */
+function lmsShipCreate_(req, me) {
+  var rows = (req.rows || []).slice(0, 300), out = [], errors = [];
+  rows.forEach(function (r, i) {
+    var mem = lmsGet_('members', r.memId);
+    if (!mem) { errors.push('第 ' + (i + 1) + ' 筆找不到學姐'); return; }
+    if (!cleanText(r.item) || !cleanText(r.no) || isNaN(LMS_CORE.parse(r.sent_at))) { errors.push('第 ' + (i + 1) + ' 筆缺少品項、單號或寄出日'); return; }
+    out.push({ id: 's' + LMS_CORE.hash(mem.id + '|' + r.no).slice(0, 11), mem_id: mem.id, item: cleanText(r.item).slice(0, 60), carrier: ['sf', 'post', 'other'].indexOf(r.carrier) >= 0 ? r.carrier : 'other', carrierName: cleanText(r.carrierName).slice(0, 20), no: cleanText(r.no).slice(0, 40), sent_at: LMS_CORE.iso(r.sent_at), by: me.email, at: nowIso(), source: cleanText(r.source).slice(0, 40) });
+  });
+  lmsPut_('ships', out);
+  return { created: out.length, errors: errors, ships: out };
+}
+/** 包裹異常回報：讀既有對話紀錄（唯讀）中以「包裹異常回報」開頭的來訊，產生工作台待辦並經天使 OA 通知校長與助教 */
+function lmsShipScan() {
+  LMS_CACHE = {};
+  var open = lmsRows_('ships').filter(function (s) { return !s.confirmed_at && !s.issue_at; });
+  if (!open.length || typeof chatSheet !== 'function') return 0;
+  var sh = chatSheet(false); if (!sh || sh.getLastRow() < 2) return 0;
+  var start = Math.max(2, sh.getLastRow() - 1500), vals = sh.getRange(start, 1, sh.getLastRow() - start + 1, 5).getValues();
+  var byKey = {}; open.forEach(function (s) { var m = lmsGet_('members', s.mem_id); if (m && m.key) (byKey[m.key] = byKey[m.key] || []).push(s); });
+  var n = 0;
+  vals.forEach(function (r) {
+    if (r[2] !== 'in' || !byKey[r[1]] || !/^'?包裹異常回報/.test(String(r[4]))) return;
+    var text = String(r[4]).replace(/^'/, ''), no = (/單號\s*([A-Za-z0-9-]+)/.exec(text) || [])[1];
+    var s = byKey[r[1]].filter(function (x) { return !no || x.no === no; })[0]; if (!s || s.issue_at) return;
+    s.issue_at = String(r[0]); s.issue_text = text.slice(0, 400); lmsPut_('ships', [s]);
+    var mem = lmsGet_('members', s.mem_id) || {};
+    lmsPut_('todos', [{ id: 'ship-' + s.id, kind: 'ship_issue', title: (mem.name || '') + ' 學姐回報包裹異常', detail: text.slice(0, 400), ship: s.id, mem_id: s.mem_id, at: nowIso() }]);
+    try { if (typeof adminPush === 'function') adminPush('【包裹異常】' + (mem.name || '') + ' 學姐\n' + s.item + '｜' + s.no + '\n' + text.slice(0, 300) + '\n請到學院管理後台 › 工作台處理', 'lms_ship', s.id, '包裹異常回報'); } catch (e) { console.error('lms ship push ' + e.message); }
+    n++;
+  });
+  return n;
+}
+
+/* ── 觸發器（只新增 lms 自己的，不動既有觸發器） ─────────── */
+var LMS_TRIGGERS = { daily: 'lmsDeadlineDaily', scan: 'lmsShipScan', deferred: 'lmsDeferredRun' };
+function lmsTriggerState_() {
+  try { var t = ScriptApp.getProjectTriggers().map(function (x) { return x.getHandlerFunction(); }); return { daily: t.indexOf(LMS_TRIGGERS.daily) >= 0, scan: t.indexOf(LMS_TRIGGERS.scan) >= 0, deferred: t.filter(function (h) { return h === LMS_TRIGGERS.deferred; }).length }; } catch (e) { return null; }
+}
+/** lms_trigger_install（校長）：每天 12:00 截止通知、每 30 分鐘掃描包裹異常回報 */
+function lmsTriggerInstall_() {
+  var st = lmsTriggerState_() || {};
+  if (!st.daily) ScriptApp.newTrigger(LMS_TRIGGERS.daily).timeBased().everyDays(1).atHour(12).nearMinute(5).inTimezone('Asia/Taipei').create();
+  if (!st.scan) ScriptApp.newTrigger(LMS_TRIGGERS.scan).timeBased().everyMinutes(30).create();
+  return lmsTriggerState_();
+}
+function lmsDeferTrigger_(sendAt) {
+  var st = lmsTriggerState_() || {}; if (st.deferred) return;
+  ScriptApp.newTrigger(LMS_TRIGGERS.deferred).timeBased().at(new Date(LMS_CORE.parse(sendAt) + 60000)).create();
+}
+/** 安靜時段延後的手動提醒：到 09:00 發送，完成後移除這個一次性觸發器 */
+function lmsDeferredRun() {
+  LMS_CACHE = {};
+  var S = lmsSettings_(), due = lmsRows_('queue').filter(function (q) { return q.status === 'scheduled' && LMS_CORE.parse(q.sendAt) <= Date.now() + 60000; });
+  if (due.length) lmsDeliver_(lmsSendSpecs_({ queueIds: due.map(function (q) { return q.id; }) }), S, null, { manual: true });
+  ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === LMS_TRIGGERS.deferred) ScriptApp.deleteTrigger(t); });
+}
+/**
+ * 每日截止通知（每天 12:00）：今天該發的自動提醒，發送前重新檢查；
+ *  試營運：最多發 trialAutoMax 張給校長預覽，其餘記為「試營運未發」；正式：發給學姐；autoSend=false 時只排不發
+ */
+function lmsDeadlineDaily() {
+  LMS_CACHE = {};
+  var S = lmsSettings_(), now = Date.now(), today = LMS_CORE.dayKey(now);
+  var sum = { sent: [], skipped: [], off: {}, note: '' };
+  var finish = function (r) { lmsDailySummary_(today, S, sum); return r; };
+  if (LMS_CORE.inQuiet(now, S.quiet)) { sum.note = '執行時間在安靜時段內，今天沒有自動發送'; return finish({ skipped: 'quiet' }); }
+  var plan = lmsPlan_(lmsItems_(false));
+  var isToday = function (c) { return c.day === today && LMS_CORE.parse(c.sendAt) <= now + 30 * 60000; };
+  (plan.offCards || []).filter(isToday).forEach(function (c) { sum.off[c.kind] = (sum.off[c.kind] || 0) + 1; });
+  var due = plan.cards.filter(isToday);
+  var nameOf = function (c) { return (lmsGet_('members', c.mem_id) || {}).name || ''; };
+  if (S.autoSend === false) { due.forEach(function (c) { sum.skipped.push({ kind: c.kind, memberName: nameOf(c), reason: '每日自動發送已關閉（只排不發）' }); }); return finish({ due: due.length, sent: 0 }); }
+  if (!due.length) return finish({ due: 0, sent: 0 });
+  var specs = lmsSendSpecs_({ cardIds: due.map(function (c) { return c.id; }) });
+  if (S.mode !== 'live') {
+    var max = Math.max(0, Number(S.trialAutoMax) || 0);
+    specs.slice(max).forEach(function (sp) { sum.skipped.push({ kind: sp.items[0] ? sp.items[0].kind : '', memberName: nameOf({ mem_id: sp.items[0] ? sp.items[0].mem_id : '' }), reason: '試營運每日預覽上限 ' + max + ' 張' }); });
+    specs = specs.slice(0, max);
+  }
+  var r = lmsDeliver_(specs, S, null, {});
+  var byCard = {}; specs.forEach(function (sp) { byCard[sp.cardId] = sp; });
+  (r.results || []).forEach(function (x) { var sp = byCard[x.cardId] || { items: [] }, it = sp.items[0] || {}; var row = { kind: it.kind || '', memberName: nameOf({ mem_id: it.mem_id }) }; if (x.ok) sum.sent.push(row); else { row.reason = x.reason || '發送失敗'; sum.skipped.push(row); } });
+  return finish(r);
+}
+/** 每日排程摘要：天使 OA 給校長（設定 dailySummary，預設開）；同一天只發一次 */
+function lmsDailySummary_(day, S, sum) {
+  try {
+    if (S.dailySummary === false) return;
+    var st = lmsGet_('sync_runs', 'daily') || { id: 'daily' };
+    if (st.lastSummary === day) return;
+    var text = LMS_CORE.dailySummaryText(day, S, sum);
+    if (typeof adminPush === 'function') adminPush(text, 'lms', 'lms.daily.' + day, '學院提醒摘要');
+    st.lastSummary = day; st.lastText = text.slice(0, 1500); st.at = nowIso();
+    lmsPut_('sync_runs', [st]);
+  } catch (e) { console.error('lms daily summary ' + e.message); }
+}
