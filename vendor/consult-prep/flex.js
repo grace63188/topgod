@@ -540,7 +540,7 @@
   /* 管理端                                                               */
   /* ------------------------------------------------------------------ */
   /**
-   * 管理匯報 { role:'principal'|'assistant', date?, items:[{ key, label?, count, names?:[] }] 或 { key: count|{count,names} }, enabled?:[key]（勾選項目）, quota?:{ used, remaining }, paused? }
+   * 管理匯報 { role:'principal'|'assistant', date?, items:[{ key, label?, count, names?:[] }] 或 { key: count|{count,names} }, enabled?:[key]（勾選項目）, quota?（3.6.0 起忽略）, paused? }
    *   沒有事項（count 0）的項目不顯示；按鈕：打開作業追蹤、打開諮詢準備
    */
   function report(d) {
@@ -582,9 +582,7 @@
         body.push(slip('名單', lr, 'gold'));
       }
     }
-    if (d.quota && (d.quota.used != null || d.quota.remaining != null)) {
-      body.push(txt('LINE 額度　本月已用 ' + (Number(d.quota.used) || 0) + ' 則・剩 ' + (d.quota.remaining == null ? '不限' : (Number(d.quota.remaining) || 0) + ' 則') + (d.paused ? '（學姐提醒暫停）' : ''), { size: 'xxs', color: d.paused ? C.err : C.t3, margin: 'lg', wrap: true }));
-    }
+    /* 3.6.0：匯報卡不顯示 LINE 額度（額度改看學院管理後台工作台儀表）；d.quota 傳入也忽略 */
     var mainUrl = role === 'assistant' ? track : prep;
     var total = items.reduce(function (s, x) { return s + (Number(x.count) || 0); }, 0);
     return bubble({ type: type, d: d, tag: role === 'assistant' ? '助教匯報' : '校長匯報', tagTone: 'gold', body: body, action: uri('打開', mainUrl), admit: [role === 'assistant' ? 'ASSISTANT REPORT' : 'PRINCIPAL REPORT', stampNo(day)],

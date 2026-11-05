@@ -3108,7 +3108,7 @@
 
   /* ---------------- 3.3.7 書籤版本 ---------------- */
   /** 三支書籤共用版本號（src/roster-bookmarklet.js、src/line-map-bookmarklet.js 的 BM_VERSION 需一致；build.py 檢查） */
-  var BOOKMARKLET = { version: '3.5.0', kinds: { roster: '學院後台同步', orders: '同步學院下單', linemap: 'LINE 對應' } };
+  var BOOKMARKLET = { version: '3.6.0', kinds: { roster: '學院後台同步', orders: '同步學院下單', linemap: 'LINE 對應' } };
   /** 'x.y.z' 比較：a < b → -1、相等 0、a > b → 1；無法解析視為 0.0.0 */
   function semverCmp(a, b) {
     var p = function (v) { var m = /^v?(\d{1,4})\.(\d{1,4})\.(\d{1,4})$/.exec(String(v == null ? '' : v).trim()); return m ? [+m[1], +m[2], +m[3]] : [0, 0, 0]; };

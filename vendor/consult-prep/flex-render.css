@@ -1,0 +1,70 @@
+/* LINE Flex Message 預覽（src/flex-render.js；後台發送面板共用）
+ * 聊天室外觀依 data-theme（dark／light）；卡片本身的顏色完全由 Flex JSON 決定 */
+.fr{
+  --fr-chat:#1E1F22;--fr-bar:#121214;--fr-bar-t:#F2F2F2;--fr-meta:#8A8A8E;--fr-tb:#2E2F33;--fr-tb-t:#EDEDED;--fr-name:#B5B5B9;
+  --fr-day:rgba(255,255,255,.08);--fr-day-t:#C9C9CD;--fr-alt:rgba(0,0,0,.35);--fr-alt-t:#E8E8EA;--fr-link:#7FB2FF;
+  --fr-nav:var(--ink-2,#191516);--fr-nav-t:var(--text-1,#F6EFEA);--fr-nav-2:var(--text-3,#A0948F);--fr-nav-line:var(--line-2,rgba(246,239,234,.12));
+  --fr-ring:var(--rose-300,#FF77B2);
+  display:flex;flex-direction:column;gap:10px;min-width:0;width:100%;max-width:100%;outline:none;
+  font-family:'Noto Sans TC','Noto Sans CJK TC','PingFang TC','Microsoft JhengHei',sans-serif;-webkit-font-smoothing:antialiased;
+}
+.fr[data-theme="light"]{
+  --fr-chat:#8CA9CF;--fr-bar:#FFFFFF;--fr-bar-t:#111111;--fr-meta:#3E4F66;--fr-tb:#FFFFFF;--fr-tb-t:#111111;--fr-name:#1D2A3A;
+  --fr-day:rgba(0,0,0,.18);--fr-day-t:#FFFFFF;--fr-alt:rgba(0,0,0,.22);--fr-alt-t:#FFFFFF;--fr-link:#1F5FBF;
+}
+.fr *,.fr *::before,.fr *::after{box-sizing:border-box}
+
+/* 收件人切換列 */
+.fr-nav{display:flex;align-items:center;gap:8px;min-height:44px;padding:4px;border:1px solid var(--fr-nav-line);border-radius:12px;background:var(--fr-nav);color:var(--fr-nav-t)}
+.fr-nav.one{padding:8px 12px}
+.fr-id{flex:1 1 0;min-width:0;display:flex;flex-direction:column;gap:2px;text-align:center}
+.fr-nav.one .fr-id,.fr-nav.one{text-align:left}
+.fr-who{font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fr-sub{font-size:12px;color:var(--fr-nav-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fr-nav.one .fr-sub{margin-left:8px}
+.fr-count{flex:none;font-size:12px;color:var(--fr-nav-2);font-variant-numeric:tabular-nums;padding:0 4px}
+.fr-arrow{flex:none;width:40px;height:40px;display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:10px;background:transparent;color:inherit;cursor:pointer;touch-action:manipulation}
+.fr-arrow svg,.fr-bar svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.fr-arrow:hover:not(:disabled){background:rgba(255,255,255,.06)}
+.fr-arrow:disabled{opacity:.3;cursor:default}
+.fr-arrow:focus-visible,.fr-act:focus-visible{outline:2px solid var(--fr-ring);outline-offset:2px}
+
+/* 手機聊天室 */
+.fr-screen{border-radius:16px;overflow:hidden;background:var(--fr-chat);min-width:0}
+.fr-bar{display:flex;align-items:center;gap:8px;height:44px;padding:0 12px;background:var(--fr-bar);color:var(--fr-bar-t);font-size:15px}
+.fr-bar b{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fr-chat{padding:12px 6px 16px;display:flex;flex-direction:column}
+.fr-day{align-self:center;margin-bottom:12px;padding:3px 12px;border-radius:12px;background:var(--fr-day);color:var(--fr-day-t);font-size:12px}
+.fr-row{display:flex;gap:8px;align-items:flex-start}
+.fr-av{flex:none;width:32px;height:32px;border-radius:50%;background:#0C0A0B center/26px auto no-repeat;box-shadow:0 0 0 1px rgba(255,255,255,.12);color:#D9B877;font:700 14px/32px serif;text-align:center}
+.fr-col{display:flex;flex-direction:column;gap:6px;min-width:0}
+.fr-from{margin:0;font-size:12px;color:var(--fr-name)}
+.fr-line{display:flex;align-items:flex-end;gap:6px}
+.fr-tm{flex:none;font-size:10px;color:var(--fr-meta);white-space:nowrap;padding-bottom:2px}
+.fr-tb{max-width:250px;padding:9px 12px;border-radius:4px 16px 16px 16px;background:var(--fr-tb);color:var(--fr-tb-t);font-size:15px;line-height:1.45;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}
+.fr-u{color:var(--fr-link);text-decoration:underline;word-break:break-all}
+.fr-pic img{display:block;max-width:220px;border-radius:12px}
+.fr-alt{margin:14px 4px 0;padding:9px 12px;border-radius:12px;background:var(--fr-alt);color:var(--fr-alt-t);font-size:12px;line-height:1.5;word-break:break-word}
+.fr-alt b{display:block;font-size:11px;opacity:.7;margin-bottom:2px;font-weight:600}
+.fr-empty{margin:24px 0;text-align:center;color:var(--fr-meta);font-size:13px}
+.fr-hint{margin:0;padding:8px 12px;border-radius:10px;border:1px dashed var(--fr-nav-line);color:var(--fr-nav-2);font-size:12px;line-height:1.5;word-break:break-all}
+.fr-hint[hidden]{display:none}
+
+/* Flex 元件（LINE 規格數值；尺寸由 inline style 帶入） */
+.fr-bubble{position:relative;flex:none;display:flex;flex-direction:column;overflow:hidden;border-radius:16px;background:#FFFFFF;max-width:100%}
+.fr-block{display:flex;flex-direction:column;flex:none}
+.fr-block>.fr-box{flex:1 1 auto}
+.fr-box{display:flex;min-width:0;position:relative}
+.fr-text{min-width:0;line-height:1.4;word-break:break-word;overflow-wrap:anywhere}
+.fr-nowrap{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fr-wrap{white-space:pre-wrap}
+.fr-clamp{display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden}
+.fr-img{position:relative;overflow:hidden;flex:none}
+.fr-img img{display:block;width:100%;height:100%}
+.fr-button{display:flex;align-items:center;justify-content:center;border-radius:8px;padding:0 12px;font-size:16px;min-width:0}
+.fr-button span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fr-sep{flex:none}
+.fr-act{cursor:pointer}
+.fr-act.fr-on{box-shadow:0 0 0 2px var(--fr-ring)}
+.fr-bubble.fr-on{box-shadow:none}
+@media (hover:hover){.fr-box.fr-act:hover,.fr-button:hover{filter:brightness(1.08)}}
