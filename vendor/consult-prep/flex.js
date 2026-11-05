@@ -62,6 +62,17 @@
     ok: '#5CCFA3', okTint: '#5CCFA31F', warn: '#E8B85C', err: '#FF7A5C', errTint: '#FF7A5C1F'
   };
 
+  /* 3.8.0 內部匯報（校長／助教）杏仁白色票：與學姐端深色卡區隔；鍵同 C，report() 組卡時暫時換用 */
+  var CREAM = {
+    ink0: '#EFE3D3', ink1: '#F7F0E6', ink2: '#F4E7DA', ink3: '#EADCCB', ink5: '#D9C8B4',
+    t1: '#3A1424', t2: '#5C3A47', t3: '#8A6E78',
+    rose: '#C7306A', rose300: '#C7306A', roseInk: '#FFF7F2', roseHi: '#D6457F', roseLo: '#B82A62',
+    roseTint: '#C7306A14', roseLine: '#C7306A55',
+    gold: '#A8823F', goldLine: '#C9A8627A', goldSoft: '#C9A86226',
+    line1: '#3A142418', line2: '#3A142430',
+    ok: '#2E8C66', okTint: '#2E8C661F', warn: '#B7862A', err: '#C4492F', errTint: '#C4492F1A'
+  };
+
   /* 卡片類型 → 頂圖、編號、英文標 */
   var TYPES = {
     assignment: { hero: 'hero-assign.png', no: '01', title: '作業通知' },
@@ -73,8 +84,8 @@
     overdue: { hero: 'hero-overdue.png', no: '06', title: '逾期通知' },
     materialOrder: { hero: 'hero-matorder.png', no: '07', title: '教材下單' },
     materialDeliver: { hero: 'hero-matdeliver.png', no: '08', title: '教材交付' },
-    reportPrincipal: { hero: 'hero-report-principal.png', no: 'R1', title: '校長匯報' },
-    reportAssistant: { hero: 'hero-report-assistant.png', no: 'R2', title: '助教匯報' },
+    reportPrincipal: { hero: 'hero-report-principal.png', heroCream: 'hero-report-principal-cream.png', no: 'R1', title: '校長匯報' },
+    reportAssistant: { hero: 'hero-report-assistant.png', heroCream: 'hero-report-assistant-cream.png', no: 'R2', title: '助教匯報' },
     toolTest: { hero: 'hero-tooltest.png', no: 'T1', title: '工具待測試' },
     toolPassed: { hero: 'hero-toolpass.png', no: 'T2', title: '工具已通過' },
     toolRevise: { hero: 'hero-toolrevise.png', no: 'T3', title: '等待校長修改' },
@@ -279,7 +290,7 @@
     footer.push(txt('G.R.A.C.E ACADEMY', { size: 'xxs', color: C.t3, align: 'center', margin: 'md' }));
     var b = {
       type: 'bubble', size: CONFIG.bubbleSize,
-      hero: { type: 'image', url: u.asset + T.hero, size: 'full', aspectRatio: CONFIG.heroRatio, aspectMode: 'cover', backgroundColor: C.ink0 },
+      hero: { type: 'image', url: u.asset + ((C === CREAM && T.heroCream) || T.hero), size: 'full', aspectRatio: CONFIG.heroRatio, aspectMode: 'cover', backgroundColor: C.ink0 },
       body: vbox([head].concat(spec.body), { paddingAll: '20px', paddingTop: '16px', paddingBottom: '18px', backgroundColor: C.ink1 }),
       footer: vbox(footer, { paddingAll: '16px', paddingTop: '0px', paddingBottom: '12px', backgroundColor: C.ink2 }),
       styles: { hero: { backgroundColor: C.ink0 }, body: { backgroundColor: C.ink1 }, footer: { backgroundColor: C.ink2, separator: false } }
@@ -543,7 +554,9 @@
    * 管理匯報 { role:'principal'|'assistant', date?, items:[{ key, label?, count, names?:[] }] 或 { key: count|{count,names} }, enabled?:[key]（勾選項目）, quota?（3.6.0 起忽略）, paused? }
    *   沒有事項（count 0）的項目不顯示；按鈕：打開作業追蹤、打開諮詢準備
    */
-  function report(d) {
+  /** 3.8.0 匯報卡改杏仁白（內部卡）；內容與按鈕不變 */
+  function report(d) { var keep = C; C = CREAM; try { return reportCard_(d); } finally { C = keep; } }
+  function reportCard_(d) {
     d = d || {};
     var role = d.role === 'assistant' ? 'assistant' : 'principal', type = role === 'assistant' ? 'reportAssistant' : 'reportPrincipal';
     var cat = REPORT_ITEMS[role], labels = {}, all = REPORT_ITEMS.principal.concat(REPORT_ITEMS.assistant);
@@ -558,7 +571,7 @@
     var now = nowOf(d), day = parseTime(d.date); if (day == null) day = now;
     var track = adminView(d, 'track'), prep = adminView(d, 'prep');
     var body = [rich([{ em: role === 'assistant' ? '確認繳交' : '準備工具', color: C.t1 }, '　' + fmtDateW(day)], { size: 'lg', color: C.t3, margin: 'md', wrap: false }), leadRule()];
-    if (!items.length) body.push(vbox([txt('目前沒有待處理事項', { size: 'sm', color: C.t2, align: 'center' })], { margin: 'lg', paddingAll: '16px', cornerRadius: '12px', backgroundColor: C.ink2 }));
+    if (!items.length) body.push(vbox([txt(d.lms ? '諮詢準備目前沒有待處理事項' : '目前沒有待處理事項', { size: 'sm', color: C.t2, align: 'center' })], { margin: 'lg', paddingAll: '16px', cornerRadius: '12px', backgroundColor: C.ink2 }));
     else {
       var rowsG = [];
       for (var i = 0; i < items.length; i += 3) {
@@ -582,13 +595,27 @@
         body.push(slip('名單', lr, 'gold'));
       }
     }
+    /* 3.8.0 合併匯報：學院管理後台的「學院提醒」段（d.lms＝{ title, tiles:[{label,n,hot}], lines:[], note }） */
+    var LM = d.lms && typeof d.lms === 'object' ? d.lms : null;
+    if (LM) {
+      body.splice(2, 0, txt('諮詢準備', { size: 'sm', weight: 'bold', color: C.t1, margin: 'lg' }));
+      body.push(txt(clip(LM.title || '學院提醒', 20), { size: 'sm', weight: 'bold', color: C.t1, margin: 'xl' }));
+      var lt = (LM.tiles || []).slice(0, 9);
+      for (var li = 0; li < lt.length; li += 3) {
+        var lc = lt.slice(li, li + 3).map(function (x) { return vbox([txt(String(Math.round(Number(x.n) || 0)), { size: 'xxl', weight: 'bold', color: x.hot ? C.rose300 : C.t1 }), txt(clip(x.label, 16), { size: 'xxs', color: C.t3, margin: 'xs', wrap: true })], { flex: 1, paddingAll: '10px', cornerRadius: '10px', backgroundColor: x.hot ? C.roseTint : C.ink2, borderWidth: '1px', borderColor: x.hot ? C.roseLine : C.line1 }); });
+        while (lc.length < 3) lc.push(vbox([], { flex: 1 }));
+        body.push(hbox(lc, { spacing: 'sm', margin: li ? 'sm' : 'md' }));
+      }
+      var ll = (LM.lines || []).filter(Boolean);
+      if (ll.length) body.push(slip('今天要處理', ll.slice(0, 6).map(function (x) { return txt('◆ ' + clip(x, 60), { size: 'xs', color: C.t2, wrap: true, margin: 'sm' }); }).concat(ll.length > 6 ? [txt('另有 ' + (ll.length - 6) + ' 項', { size: 'xxs', color: C.t3, margin: 'sm' })] : []), 'gold'));
+    }
     /* 3.6.0：匯報卡不顯示 LINE 額度（額度改看學院管理後台工作台儀表）；d.quota 傳入也忽略 */
     var mainUrl = role === 'assistant' ? track : prep;
     var total = items.reduce(function (s, x) { return s + (Number(x.count) || 0); }, 0);
     return bubble({ type: type, d: d, tag: role === 'assistant' ? '助教匯報' : '校長匯報', tagTone: 'gold', body: body, action: uri('打開', mainUrl), admit: [role === 'assistant' ? 'ASSISTANT REPORT' : 'PRINCIPAL REPORT', stampNo(day)],
       buttons: role === 'assistant'
-        ? [primaryBtn('打開作業追蹤', uri('打開作業追蹤', track)), secondaryBtn('打開諮詢準備', uri('打開諮詢準備', prep))]
-        : [primaryBtn('打開諮詢準備', uri('打開諮詢準備', prep)), secondaryBtn('打開作業追蹤', uri('打開作業追蹤', track))],
+        ? [primaryBtn('打開作業追蹤', uri('打開作業追蹤', track)), secondaryBtn('打開諮詢準備', uri('打開諮詢準備', prep))].concat(LM && LM.links && /^https:/.test(LM.links.today || '') ? [secondaryBtn('打開今日工作台', uri('打開今日工作台', LM.links.today))] : [])
+        : [primaryBtn('打開諮詢準備', uri('打開諮詢準備', prep)), secondaryBtn('打開作業追蹤', uri('打開作業追蹤', track))].concat(LM && LM.links && /^https:/.test(LM.links.auto || '') ? [secondaryBtn('打開提醒排程', uri('打開提醒排程', LM.links.auto))] : []),
       altText: (role === 'assistant' ? '助教匯報' : '校長匯報') + ' ' + fmtDate(day) + '：' + (items.length ? items.slice(0, 6).map(function (x) { return (x.label || labels[x.key] || x.key) + ' ' + Math.round(Number(x.count)); }).join('・') : '目前沒有待處理事項') + (total && items.length > 6 ? '…' : '') });
   }
 
@@ -899,10 +926,10 @@
   }
 
   /** 需上傳到 GitHub Pages（assets/flex/）的頂圖檔名 */
-  function heroFiles() { var s = {}; Object.keys(TYPES).forEach(function (k) { s[TYPES[k].hero] = 1; }); return Object.keys(s); }
+  function heroFiles() { var s = {}; Object.keys(TYPES).forEach(function (k) { s[TYPES[k].hero] = 1; if (TYPES[k].heroCream) s[TYPES[k].heroCream] = 1; }); return Object.keys(s); }   /* 3.8.0 含杏仁白匯報頂圖 */
 
   return {
-    VERSION: VERSION, NAME: NAME, CONFIG: CONFIG, LIMITS: LIMITS, COLORS: C, TYPES: TYPES, REPORT_ITEMS: REPORT_ITEMS, UNZIP: UNZIP,
+    VERSION: VERSION, NAME: NAME, CONFIG: CONFIG, LIMITS: LIMITS, COLORS: C, COLORS_INTERNAL: CREAM, TYPES: TYPES, REPORT_ITEMS: REPORT_ITEMS, UNZIP: UNZIP,
     assignment: assignment, remind: remind, supplement: supplement, thanks: thanks, autoRemind: autoRemind, overdue: overdue,
     materialOrder: materialOrder, materialDeliver: materialDeliver, report: report, toolTest: toolTest, toolResult: toolResult, submitted: submitted, suppResult: suppResult, suppReject: suppReject, orderPrice: orderPrice, orderClaim: orderClaim, adminRemind: adminRemind,
     build: build, messages: messages, validate: validate, heroFiles: heroFiles,

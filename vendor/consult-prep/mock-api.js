@@ -822,10 +822,10 @@
     cfg.work.now = A.enabled.submitNotify !== false;
     var at = function (h) { return tpeStamp(new Date(now - h * H)); };
     var items = {
-      tool: [{ key: 'a1b2c3d4e5f60718', name: '王小美', at: at(10), extra: '定價計算表 v2' }, { key: 'b1b2c3d4e5f60718', name: '林佩君', at: at(13), extra: 'IG 排程模板 v1' }, { key: 'c1b2c3d4e5f60718', name: '張雅婷', at: at(3), extra: '客戶分級問卷 v1' }],
-      work: [{ key: 'r20261103001', name: '王小美', at: at(5), note: '未讀' }, { key: 'r20261103002', name: '陳雅婷', at: at(8), note: '未讀' }, { key: 'd1b2c3d4e5f60718', name: '李曉晴', at: at(26), note: '已送出待看' }],
-      issue: [{ key: 'b1b2c3d4e5f60718', name: '林佩君', at: at(1), extra: 'IG 排程模板 v1', note: '功能異常' }],
-      deliver: [{ key: 'e1b2c3d4e5f60718', name: '周映彤', at: at(26), extra: '專屬教材' }, { key: 'f1b2c3d4e5f60718', name: '宋晴禾', at: at(3), extra: '專屬教材' }]
+      tool: [{ key: 'a1b2c3d4e5f60718', name: '範例小美', at: at(10), extra: '定價計算表 v2' }, { key: 'b1b2c3d4e5f60718', name: '範例佩君', at: at(13), extra: 'IG 排程模板 v1' }, { key: 'c1b2c3d4e5f60718', name: '範例雅婷', at: at(3), extra: '客戶分級問卷 v1' }],
+      work: [{ key: 'r20261103001', name: '範例小美', at: at(5), note: '未讀' }, { key: 'r20261103002', name: '虛構雅婷', at: at(8), note: '未讀' }, { key: 'd1b2c3d4e5f60718', name: '範例曉晴', at: at(26), note: '已送出待看' }],
+      issue: [{ key: 'b1b2c3d4e5f60718', name: '範例佩君', at: at(1), extra: 'IG 排程模板 v1', note: '功能異常' }],
+      deliver: [{ key: 'e1b2c3d4e5f60718', name: '範例映彤', at: at(26), extra: '專屬教材' }, { key: 'f1b2c3d4e5f60718', name: '範例晴禾', at: at(3), extra: '專屬教材' }]
     };
     if (!st.since.tool) RM.KINDS.forEach(function (k) { st.since[k] = now - 6 * H; });
     var rc = { principal: 0, assistant: 0 }, list = (A.adminRecipients || []).map(function (r) { var role = S().recipientRole(r.role) === 'assistant' ? 'assistant' : 'principal', on = S().recipientEnabled(r); if (on) rc[role]++; return { id: r.id || r.userId || r.adminUserId, name: r.name || '', role: role, enabled: on, tail: String(r.adminUserId || r.userId || '').slice(-4), channel: 'admin' }; });
@@ -1553,11 +1553,11 @@
     var at = function (d, hh, mm) { var t = new Date(now + d * day + 8 * 3600000); return s.deadlineIso(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate(), hh - 8, mm)); };
     var C = [['sung.sunny', 2, 15, 50, ['佈局設計']], ['hsiu_yun', 2, 17, 10, ['內容輸出設計系統（二）']], ['chien_yu', 9, 17, 20, ['版面健檢']], ['yu_an', 21, 17, 15, ['開發社群價值', '課後輔導']], ['yating.lin@gmail.com', 1, 10, 30, ['戰友輔助']]];
     C.forEach(function (c) { var k = s.rosterKey(c[0]); if (!db.roster.entries[k]) return; db.counsel.entries[keyHash(k)] = { nc: { at: at(c[1], c[2], c[3]), items: c[4], status: c[4].length > 1 ? 'combined' : 'confirmed' }, y: db.seed32 }; });
-    // 3.2.4 跨年度示範：黃卉寧 2027.01.15（五）14:00 合併諮詢（已過時順延一年，保持在未來）
+    // 3.2.4 跨年度示範：示範卉寧 2027.01.15（五）14:00 合併諮詢（已過時順延一年，保持在未來）
     var kHL = s.rosterKey('hui_ning');
     if (db.roster.entries[kHL]) { var yHL = 2027, msHL = Date.UTC(yHL, 0, 15, 6, 0); while (msHL < now + 7 * day) { yHL++; msHL = Date.UTC(yHL, 0, 15, 6, 0); } db.counsel.entries[keyHash(kHL)] = { nc: { at: s.deadlineIso(msHL), items: ['版面健檢', '佈局設計'], status: 'combined' }, y: db.seed32 }; }
     db.counsel.syncAt = db.counsel.entries && Object.keys(db.counsel.entries).length ? db.seed32 : '';
-    // 3.2.4 示範：已發送作業通知者才列入諮詢準備（黃卉寧、林雅婷未發通知 → 不列入，諮詢詳情仍可查預約）
+    // 3.2.4 示範：已發送作業通知者才列入諮詢準備（示範卉寧、樣本雅婷未發通知 → 不列入，諮詢詳情仍可查預約）
     ['sung.sunny', 'hsiu_yun', 'chien_yu', 'yu_an'].forEach(function (acc) { var hN = keyHash(s.rosterKey(acc)), eN = watchLoad(db, hN); if (eN && !(eN.nt || []).length) { eN.nt = [{ at: tpeStamp(new Date(now - 2 * day)), ok: true, kind: 'notify', err: '', img: 0 }]; watchStore(db, eN); } });
     seedStudentsMock(db);
     db.matLib = [{ id: 'lib01', name: '清朝苑｜經營加速器・作戰指南', amount: 15000, note: 'HTML 工具＋ZIP' }, { id: 'lib02', name: '銷售建構複習器', amount: 12345, note: 'ZIP' }];
@@ -1594,7 +1594,7 @@
     var msg = function (name, prod, path, verb, text) { return '親愛的官方，我是' + name + '。我在《' + prod + '》的〔' + path + '〕' + verb + '：' + text; };
     var nm = function (acc) { return db.roster.entries[s.rosterKey(acc)] || ''; };
     if (nm('hsiu_yun')) suppRecord(db, msg(nm('hsiu_yun'), '諮詢教材·專屬訂製', '實際步驟 › 接待客人', '還想補充', '客人臨時改期時，要先確認新時段再退訂金差額，確認後才改單'), uidOf('hsiu_yun'), now - 26 * 3600000);
-    suppRecord(db, msg('張芷涵', '諮詢前置作業', '資源清單 › 工具系統', '還想新增', '蝦皮聊聊'), 'U' + 'f'.repeat(31) + '1', now - 20 * 3600000);
+    suppRecord(db, msg('示範芷涵', '諮詢前置作業', '資源清單 › 工具系統', '還想新增', '蝦皮聊聊'), 'U' + 'f'.repeat(31) + '1', now - 20 * 3600000);
     if (nm('hsiu_yun')) suppRecord(db, msg(nm('hsiu_yun'), '諮詢教材·專屬訂製', '放入資料 › 價目表', '還想上傳', '各分店不同的季節限定價目表'), uidOf('hsiu_yun'), now - 3 * 3600000);
     if (nm('yu_an')) suppRecord(db, msg(nm('yu_an'), '諮詢教材·專屬訂製', '經營項目 › 收入來源', '還想新增', '直播帶貨分潤'), uidOf('yu_an'), now - 40 * 60000);
     var done = sp.rows[0]; if (done) { done.status = s.SUPP.status.no; done.item = '臨時改期處理'; done.doneAt = tpeStamp(new Date(now - 25 * 3600000)); done.reply = s.renderTemplate(s.SUPP.texts.no, s.suppVars({ path: done.path })); done.result = '已送出'; }
@@ -3347,19 +3347,19 @@
 
   /**
    * LINE 對應書籤回傳模擬（離線示範）：names=[{ key, name }] → results=[{ key, candidates:[{ userId, nickname, name, friend }] }]
-   * 王美琪、黃詩涵、張哲宇、王美好 → 自動對應；陳冠宇（同名兩位，對話帳號比對其中一位相符）→ 自動對應（依對話帳號確認）；
-   * 宋晴禾（管理者名稱不含全名，對話帳號未相符）→ 需要選擇；張晴禾（非好友）、其他 → 找不到。
+   * 範例美琪、示範詩涵、範例哲宇、範例美好 → 自動對應；範例冠宇（同名兩位，對話帳號比對其中一位相符）→ 自動對應（依對話帳號確認）；
+   * 範例晴禾（管理者名稱不含全名，對話帳號未相符）→ 需要選擇；示範晴禾（非好友）、其他 → 找不到。
    */
   function lineMapSimulate(names) {
     var uid = function (seed) { return 'U' + keyHash(seed) + keyHash(seed + '.x'); };
     var T = {
-      '王美琪': [['王美琪｜@mei.nails', 'Mei 🌸', true]],
-      '黃詩涵': [['黃詩涵@hsh_nail', '詩涵 Hannah', true]],
-      '張哲宇': [['', '張哲宇', true]],
-      '王美好': [['王美好｜@meihao', 'meihao', true]],
-      '陳冠宇': [['陳冠宇｜@kevin.chen', 'Kevin', true, true], ['冠宇（工程）', '陳冠宇', true, false]],
-      '宋晴禾': [['晴禾｜@sunny', 'Sunny', true, false]],
-      '張晴禾': [['張晴禾', 'QingHe', false]]
+      '範例美琪': [['範例美琪｜@mei.nails', 'Mei 🌸', true]],
+      '示範詩涵': [['示範詩涵@hsh_nail', '詩涵 Hannah', true]],
+      '範例哲宇': [['', '範例哲宇', true]],
+      '範例美好': [['範例美好｜@meihao', 'meihao', true]],
+      '範例冠宇': [['範例冠宇｜@kevin.chen', 'Kevin', true, true], ['冠宇（工程）', '範例冠宇', true, false]],
+      '範例晴禾': [['晴禾｜@sunny', 'Sunny', true, false]],
+      '示範晴禾': [['示範晴禾', 'QingHe', false]]
     };
     return (names || []).map(function (n) {
       // 第 4 欄：對話帳號比對結果（書籤讀取候選對話後標示；true 相符、false 已讀取未相符）

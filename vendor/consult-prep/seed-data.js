@@ -1,5 +1,5 @@
 /*
- * 離線示範作業資料（3.0／3.1）：3 份 3.0（自媒體業配為主、美業店主、保險業務）＋1 份 2.x 舊格式（經銷合作，相容示範）＋1 份 3.1 作業結構（林雅婷 保險業務）
+ * 離線示範作業資料（3.0／3.1）：3 份 3.0（自媒體業配為主、美業店主、保險業務）＋1 份 2.x 舊格式（經銷合作，相容示範）＋1 份 3.1 作業結構（樣本雅婷 保險業務）
  * 輸出：window.CONSULT_MOCK_SEED（瀏覽器）／module.exports（Node）
  * 每筆 { answers, files:[{key,name,size,mime,base64}], status, email, durationMin, drive?:{ ownerEmail, counts:{ itemId: 檔案數 | { count, shortcuts } } } }
  * 另附 roster（示範名冊）、progress（已開始未送出）、batch（官方關注名單）、supplement（示範補件需求）屬性；
@@ -50,7 +50,7 @@
     email: 'grace.lin88@gmail.com',
     durationMin: 1560,   // 1 天 2 小時
     answers: {
-      student: { account: 'grace_lin88', name: '林雅庭' },
+      student: { account: 'grace_lin88', name: '範例雅庭' },
       role: { id: 'owner', hasDownline: '' },
       profile: {
         industry: '美業', industryOther: '', brand: '庭 Lash & Brow', company: '', title: '',
@@ -122,7 +122,7 @@
     email: 'kevin.chen@example.com',
     durationMin: 95,
     answers: {
-      student: { account: 'kevin_chen', name: '陳冠宇' },
+      student: { account: 'kevin_chen', name: '範例冠宇' },
       role: { id: 'employee', hasDownline: '' },
       profile: {
         industry: '工程技術', industryOther: '', brand: '', company: '宏昇系統整合', title: '系統工程師',
@@ -186,7 +186,7 @@
     email: 'mei.wang.soulmate@gmail.com',
     durationMin: 4320,   // 3 天
     answers: {
-      student: { account: 'mei_wang', name: '王美琪' },
+      student: { account: 'mei_wang', name: '範例美琪' },
       role: { id: 'reseller', hasDownline: 'yes' },
       profile: {
         industry: '零售', industryOther: '', brand: 'SOULMATE 髮品 經銷', company: '', title: '',
@@ -272,7 +272,7 @@
     drive: { ownerEmail: 'yun.creator@gmail.com', counts: { mediaKit: 1, quote: { count: 2, shortcuts: 1 }, collabContract: 4, brief: 3, supplierContract: 2, orders: { count: 1, shortcuts: 1 }, productPlan: 1, identity: 3, portfolio: 12, marketing: 6, results: 2, dlgBooked: 2, dlgNoReply: 1 } },
     answers: {
       schema: 3,
-      student: { account: 'yun_chou', name: '周映彤' },
+      student: { account: 'yun_chou', name: '範例映彤' },
       mainWork: { name: '自媒體創作者', industry: 'media', industryOther: '', weeklyHours: 50, otherWorks: [{ name: '英文家教', weeklyHours: 4 }] },
       income: { sources: ['sponsor', 'groupbuy', 'ownproduct', 'course'], other: '', main: 'sponsor' },
       quiz: { clients: 'yes', team: 'no', superior: 'no', superiorType: '', superiorOther: '', brand: 'yes', performance: 'yes', performanceType: 'create' },
@@ -309,7 +309,7 @@
     drive: { ownerEmail: 'grace.lin88@gmail.com', counts: { depositRule: 1, workPhotos: 24, pkgPlan: 2, pkgContract: 1, catalog: 1, pricing: 2, scripts: 3, reception: 2, clientList: 1, purchases: 1, roles: 1, identity: 4, portfolio: 30, dlgBooked: 2, dlgNoReply: 1 } },
     answers: {
       schema: 3,
-      student: { account: 'grace_lin88', name: '林雅庭' },
+      student: { account: 'grace_lin88', name: '範例雅庭' },
       mainWork: { name: '美睫美眉工作室店主', industry: 'beauty', industryOther: '', weeklyHours: 48, otherWorks: [] },
       income: { sources: ['service', 'package', 'retail', 'teach'], other: '', main: 'service' },
       quiz: { clients: 'yes', team: 'yes', superior: 'no', superiorType: '', superiorOther: '', brand: 'yes', performance: 'no', performanceType: '' },
@@ -345,7 +345,7 @@
     drive: { ownerEmail: 'kevin.chen@example.com', counts: { prospects: 1, needs: 2, proposalTpl: 3, paymentReminder: 1, claims: 0, catalog: 5, scripts: 1, clientList: 1, roles: 0, policy: 1, identity: 2, dlgBooked: 1 } },
     answers: {
       schema: 3,
-      student: { account: 'kevin_chen', name: '陳冠宇' },
+      student: { account: 'kevin_chen', name: '範例冠宇' },
       mainWork: { name: '保險業務主任', industry: 'finance', industryOther: '', weeklyHours: 45, otherWorks: [] },
       income: { sources: ['newbiz', 'renewal', 'recruit'], other: '', main: 'newbiz' },
       quiz: { clients: 'yes', team: 'yes', superior: 'yes', superiorType: 'boss', superiorOther: '', brand: 'yes', performance: 'no', performanceType: '' },
@@ -373,11 +373,11 @@
   };
 
   var seeds = [mediaCreator, beautyOwner3, insuranceAgent, reseller];
-  /* ---------------- 3.1 作業結構示範：林雅婷（保險業務，確認稿 work-final/front.html 的範例） ---------------- */
+  /* ---------------- 3.1 作業結構示範：樣本雅婷（保險業務，確認稿 work-final/front.html 的範例） ---------------- */
   var insurance31 = {
     answers: {
       schema: 31,
-      student: { account: 'yating.lin@gmail.com', name: '林雅婷' },
+      student: { account: 'yating.lin@gmail.com', name: '樣本雅婷' },
       business: { name: '保險業務', industryCode: 'L', industrySub: '保險業務', industryOther: '', stage: 'stable', incomes: ['commission', 'network'], incomeOther: '', mainIncome: 'commission', otherRoles: '' },
       duties: { items: ['reply', 'reception', 'quote', 'closing', 'aftercare', 'content', 'training', 'meeting', 'report'], other: [], handover: ['reply', 'aftercare', 'report'] },
       steps: {
@@ -413,25 +413,25 @@
 
   /**
    * 示範名冊：3 位已送出的學員＋2 位已開始未送出的學員（帳號 → 本名）；一人一鍵（正式官網 uid 即 Email，書籤只送 account 一鍵），示範帳號沿用作業紀錄的 student.account。
-   * 智慧輸入示範：同名兩位（陳冠宇）、同名字不同姓（宋晴禾、張晴禾）、名字為常見詞（王美好，「美好」列為停用詞）、複姓（歐陽娜娜）。
+   * 智慧輸入示範：同名兩位（範例冠宇）、同名字不同姓（範例晴禾、示範晴禾）、名字為常見詞（範例美好，「美好」列為停用詞）、複姓（歐陽娜娜）。
    */
   seeds.roster = [
-    { account: 'yun_chou', name: '周映彤' },
-    { account: 'grace_lin88', name: '林雅庭' },
-    { account: 'kevin_chen', name: '陳冠宇' },
-    { account: 'mei_wang', name: '王美琪' },
-    { account: 'hsh_nail', name: '黃詩涵' },
-    { account: 'jerry_chang', name: '張哲宇' },
-    { account: 'kevin.chen2@gmail.com', name: '陳冠宇' },
-    { account: 'sung.sunny', name: '宋晴禾' },
-    { account: 'qinghe.chang@gmail.com', name: '張晴禾' },
+    { account: 'yun_chou', name: '範例映彤' },
+    { account: 'grace_lin88', name: '範例雅庭' },
+    { account: 'kevin_chen', name: '範例冠宇' },
+    { account: 'mei_wang', name: '範例美琪' },
+    { account: 'hsh_nail', name: '示範詩涵' },
+    { account: 'jerry_chang', name: '範例哲宇' },
+    { account: 'kevin.chen2@gmail.com', name: '範例冠宇' },
+    { account: 'sung.sunny', name: '範例晴禾' },
+    { account: 'qinghe.chang@gmail.com', name: '示範晴禾' },
     { account: 'ou_yang', name: '歐陽娜娜' },
-    { account: 'mei_hao', name: '王美好' },
-    { account: 'yating.lin@gmail.com', name: '林雅婷' },
-    { account: 'hsiu_yun', name: '林秀芸' },
-    { account: 'chien_yu', name: '李茜語' },
-    { account: 'yu_an', name: '陳予安' },
-    { account: 'hui_ning', name: '黃卉寧' }
+    { account: 'mei_hao', name: '範例美好' },
+    { account: 'yating.lin@gmail.com', name: '樣本雅婷' },
+    { account: 'hsiu_yun', name: '範例秀芸' },
+    { account: 'chien_yu', name: '範例茜語' },
+    { account: 'yu_an', name: '示範予安' },
+    { account: 'hui_ning', name: '示範卉寧' }
   ];
   /** 3.1 單一追蹤名單示範：舊關注名單遷移後（成員晴禾、秀芸、茜語、予安、卉寧；截止 2026.11.05 12:00 必須保留） */
   seeds.watch = {
@@ -443,13 +443,13 @@
   seeds.automation = { adminRecipients: [{ userId: 'U' + 'c0ffee'.repeat(5) + '01', name: '校長' }] };
 
   /** 示範填寫進度：已開始未送出（startedMinAgo、lastSeenMinAgo 以載入當下回推） */
-  /** 即時填寫進度示範：活動中（蔡宛臻）、閒置（黃詩涵）、停滯（張哲宇）；已完成為上方 3 份示範作業中近 7 天送出者 */
+  /** 即時填寫進度示範：活動中（示範宛臻）、閒置（示範詩涵）、停滯（範例哲宇）；已完成為上方 3 份示範作業中近 7 天送出者 */
   seeds.progress = [
-    { account: 'wan_tsai', name: '蔡宛臻', role: '美甲接案', startedMinAgo: 95, lastSeenMinAgo: 1, activeMin: 52, sectionId: 'flow1', percent: 46 },
-    { account: 'hsh_nail', name: '黃詩涵', role: '美睫師', startedMinAgo: 2 * 1440 + 180, lastSeenMinAgo: 45, activeMin: 38, sectionId: 'dataShare', percent: 27 },
-    { account: 'jerry_chang', name: '張哲宇', role: '門市店長', startedMinAgo: 6 * 1440, lastSeenMinAgo: 3 * 1440 + 20, activeMin: 21, sectionId: 'profile', percent: 12 }
+    { account: 'wan_tsai', name: '示範宛臻', role: '美甲接案', startedMinAgo: 95, lastSeenMinAgo: 1, activeMin: 52, sectionId: 'flow1', percent: 46 },
+    { account: 'hsh_nail', name: '示範詩涵', role: '美睫師', startedMinAgo: 2 * 1440 + 180, lastSeenMinAgo: 45, activeMin: 38, sectionId: 'dataShare', percent: 27 },
+    { account: 'jerry_chang', name: '範例哲宇', role: '門市店長', startedMinAgo: 6 * 1440, lastSeenMinAgo: 3 * 1440 + 20, activeMin: 21, sectionId: 'profile', percent: 12 }
   ];
-  /** 示範補件需求（3.0）：對周映彤最新作業建立 3 項（補資料：結案報告；補填區塊：課程或訂閱流程改完整版；其他資料） */
+  /** 示範補件需求（3.0）：對範例映彤最新作業建立 3 項（補資料：結案報告；補填區塊：課程或訂閱流程改完整版；其他資料） */
   seeds.supplement = {
     account: 'yun_chou',
     due: '2026.11.12',
@@ -460,7 +460,7 @@
     ]
   };
 
-  /** 示範優先批次（2.5.0）：截止 2026.11.05 12:00；成員為示範名冊 5 位（鍵為示範作業使用的帳號寫法，狀態才能對應）；林雅庭已綁定 LINE 通知 */
+  /** 示範優先批次（2.5.0）：截止 2026.11.05 12:00；成員為示範名冊 5 位（鍵為示範作業使用的帳號寫法，狀態才能對應）；範例雅庭已綁定 LINE 通知 */
   seeds.batch = {
     id: 'b20261011-DEMO1',
     title: '11 月優先諮詢',
@@ -473,9 +473,9 @@
   /* 2.x 三份示範（相容測試）：名冊、填寫進度、關注名單與 3.0 相同，填寫進度改為身分 id 與 2.x 區塊 */
   legacySet.roster = seeds.roster.filter(function (r) { return r.account !== 'yun_chou'; });   // 2.x 示範名冊 10 位
   legacySet.progress = [
-    { account: 'wan_tsai', name: '蔡宛臻', role: 'owner', startedMinAgo: 95, lastSeenMinAgo: 1, activeMin: 52, sectionId: 'customerFlow', percent: 46 },
-    { account: 'hsh_nail', name: '黃詩涵', role: 'freelancer', startedMinAgo: 2 * 1440 + 180, lastSeenMinAgo: 45, activeMin: 38, sectionId: 'uploads', percent: 27 },
-    { account: 'jerry_chang', name: '張哲宇', role: 'manager', startedMinAgo: 6 * 1440, lastSeenMinAgo: 3 * 1440 + 20, activeMin: 21, sectionId: 'profile', percent: 12 }
+    { account: 'wan_tsai', name: '示範宛臻', role: 'owner', startedMinAgo: 95, lastSeenMinAgo: 1, activeMin: 52, sectionId: 'customerFlow', percent: 46 },
+    { account: 'hsh_nail', name: '示範詩涵', role: 'freelancer', startedMinAgo: 2 * 1440 + 180, lastSeenMinAgo: 45, activeMin: 38, sectionId: 'uploads', percent: 27 },
+    { account: 'jerry_chang', name: '範例哲宇', role: 'manager', startedMinAgo: 6 * 1440, lastSeenMinAgo: 3 * 1440 + 20, activeMin: 21, sectionId: 'profile', percent: 12 }
   ];
   legacySet.batch = seeds.batch;
   seeds.legacySet = legacySet;

@@ -267,7 +267,7 @@
     var k = el.getAttribute('data-fr-kind'), t = el.getAttribute('data-fr-target') || '', l = el.getAttribute('data-fr-label');
     var who = l ? '「' + l + '」' : '卡片';
     if (k === 'uri') return who + '將開啟 ' + t + '（預覽不跳轉）';
-    if (k === 'message') return who + '會由學姊端送出文字「' + t + '」（預覽不送出）';
+    if (k === 'message') return who + '會由學姐端送出文字「' + t + '」（預覽不送出）';
     return who + '動作：' + t + '（預覽不執行）';
   }
 

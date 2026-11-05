@@ -184,7 +184,7 @@
     nonNameChars: '的了嗎呢吧啊喔哦唷囉啦耶您們請謝要會能到這那個是在有與及或就都也還很好被讓把給從對於為以及已將並但而且所其之此每各位些'
   };
 
-  var COMPOUND_SURNAMES = ['歐陽', '司馬', '上官', '諸葛', '東方', '皇甫', '尉遲', '公孫', '慕容', '長孫', '司徒', '夏侯', '軒轅', '令狐', '宇文', '單于', '端木', '司空', '西門', '南宮', '鮮于', '呼延', '百里', '東郭', '范姜', '張簡', '張廖'];
+  var COMPOUND_SURNAMES = [/* 示範資料的虛構姓氏 */ '範例', '示範', '樣本', '虛構', '歐陽', '司馬', '上官', '諸葛', '東方', '皇甫', '尉遲', '公孫', '慕容', '長孫', '司徒', '夏侯', '軒轅', '令狐', '宇文', '單于', '端木', '司空', '西門', '南宮', '鮮于', '呼延', '百里', '東郭', '范姜', '張簡', '張廖'];
 
   /** 學員名冊（Script Properties 分片儲存，不建立雲端檔案）與前台公開查詢的限制 */
   var ROSTER = {
@@ -1759,7 +1759,7 @@
       if (g && !isStopword(g) && (g.length > 8 || subs[g])) { var pg = positions(t, g); if (pg.length) addToken(g, pg, en, false); }
     });
     // 區間：每個字串的每個出現位置一筆；依起點遞增、長度遞減、全名優先排序後單趟掃描：
-    //   最長比對：被較長全名涵蓋的較短全名（王美 ⊂ 王美好）不列入；去姓名字出現在已比對全名內者不列入。
+    //   最長比對：被較長全名涵蓋的較短全名（範例美 ⊂ 範例美好）不列入；去姓名字出現在已比對全名內者不列入。
     var iv = [];
     tokenOrder.forEach(function (k) { var g = tokens[k]; g.pos.forEach(function (p) { iv.push({ s: p, e: p + k.length, token: k, full: g.full }); }); });
     iv.sort(function (a, b) { return a.s - b.s || b.e - a.e || (a.full === b.full ? 0 : a.full ? -1 : 1); });
@@ -3108,7 +3108,7 @@
 
   /* ---------------- 3.3.7 書籤版本 ---------------- */
   /** 三支書籤共用版本號（src/roster-bookmarklet.js、src/line-map-bookmarklet.js 的 BM_VERSION 需一致；build.py 檢查） */
-  var BOOKMARKLET = { version: '3.6.0', kinds: { roster: '學院後台同步', orders: '同步學院下單', linemap: 'LINE 對應' } };
+  var BOOKMARKLET = { version: '3.8.0', kinds: { roster: '學院後台同步', orders: '同步學院下單', linemap: 'LINE 對應' } };
   /** 'x.y.z' 比較：a < b → -1、相等 0、a > b → 1；無法解析視為 0.0.0 */
   function semverCmp(a, b) {
     var p = function (v) { var m = /^v?(\d{1,4})\.(\d{1,4})\.(\d{1,4})$/.exec(String(v == null ? '' : v).trim()); return m ? [+m[1], +m[2], +m[3]] : [0, 0, 0]; };
