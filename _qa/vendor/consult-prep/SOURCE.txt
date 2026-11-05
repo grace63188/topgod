@@ -1,8 +1,0 @@
-grace63188/consult-prep-source
-fe41a55 3.4.0 書籤「讀 LMS 資料」與 go.html 參數 l（學院管理後台 topgod）
-flex-render.js、flex-render.css：原樣複製
-tokens.css：admin/index.html 第一個 :root 區塊
-2026.11.04（topgod v2）：schema.js、model3.js、schema3.js、flex.js、tooltest-ui.*、order-flow-ui.*、track-ticket.* 取自 consult-prep-source src/（c89db74），原樣複製；諮詢 › 前置作業、諮詢教材以原生畫面讀同一個資料中心
-seed-data.js、mock-api.js：只在示範資料（?mock=1）載入，取自 grace-lms 測試版
-2026.11.04（3.5.1）：schema.js（flowStepOf／workReviewPending 共用判定）、track-ticket.js、tooltest-ui.js、mock-api.js、seed-data.js 取自 consult-prep-source 3.5.1，原樣複製
-2026.11.05（3.6.0）：schema.js（BOOKMARKLET 3.6.0）、flex.js（匯報卡移除 LINE 額度行）取自 consult-prep-source 整合版，原樣複製
