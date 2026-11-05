@@ -1,0 +1,37 @@
+/* 原樣取自 consult-prep admin/index.html 的 :root 設計變數（深色主題、玫瑰粉） */
+:root{
+  color-scheme:dark;
+  --ink-0:#0C0A0B;--ink-1:#110E0F;--ink-2:#191516;--ink-3:#211C1D;--ink-4:#2B2526;--ink-5:#352E2F;
+  --scrim:rgba(8,6,7,.72);
+  --text-1:#F6EFEA;--text-2:#CDC2BC;--text-3:#A0948F;--text-disabled:#6E6461;
+  --rose-500:#FF2E8B;--rose-400:#FF4C9C;--rose-600:#E8247E;--rose-300:#FF77B2;--rose-ink:#1A0911;
+  --rose-tint-1:rgba(255,46,139,.08);--rose-tint-2:rgba(255,46,139,.14);--rose-tint-3:rgba(255,46,139,.22);
+  --rose-line-1:rgba(255,46,139,.32);--rose-line-2:rgba(255,46,139,.64);
+  --rose-glow:0 0 0 4px rgba(255,46,139,.18);
+  --success-500:#5CCFA3;--success-tint:rgba(92,207,163,.12);--success-line:rgba(92,207,163,.40);
+  --warning-500:#E8B85C;--warning-tint:rgba(232,184,92,.12);--warning-line:rgba(232,184,92,.40);
+  --error-500:#FF7A5C;--error-tint:rgba(255,122,92,.12);--error-line:rgba(255,122,92,.55);
+  --info-500:#9DB8E8;--info-tint:rgba(157,184,232,.10);
+  --line-1:rgba(246,239,234,.07);--line-2:rgba(246,239,234,.12);--line-3:rgba(246,239,234,.40);--line-4:rgba(246,239,234,.52);
+  --focus-ring:0 0 0 2px var(--ink-1),0 0 0 4px var(--rose-300);
+  --font-serif:'Noto Serif TC','Noto Serif CJK TC','Songti TC','PMingLiU',serif;
+  --font-sans:'Noto Sans TC','Noto Sans CJK TC','PingFang TC','Microsoft JhengHei',sans-serif;
+  --font-mono:'IBM Plex Mono',ui-monospace,'SFMono-Regular',monospace;
+  --fs-caption:.8125rem;--fs-small:.875rem;--fs-body:1rem;--fs-lead:1.125rem;--fs-h3:1.25rem;--fs-h2:1.5rem;--fs-h1:1.875rem;--fs-display:2.375rem;
+  --lh-tight:1.3;--lh-body:1.7;--tracking-title:.02em;--tracking-label:.08em;
+  --measure:34em;
+  --sp-1:4px;--sp-2:8px;--sp-3:12px;--sp-4:16px;--sp-5:20px;--sp-6:24px;--sp-8:32px;--sp-10:40px;--sp-12:48px;--sp-16:64px;
+  --gutter:var(--sp-4);--container-wide:1200px;
+  --r-xs:6px;--r-sm:10px;--r-md:14px;--r-lg:20px;--r-xl:28px;--r-pill:999px;
+  --shadow-ring:0 0 0 1px var(--line-1);--shadow-ring-hi:0 0 0 1px var(--line-2);
+  --shadow-float:0 0 0 1px var(--line-2),0 12px 32px -8px rgba(0,0,0,.6),0 2px 6px rgba(0,0,0,.4);
+  --shadow-dialog:0 0 0 1px var(--line-2),0 24px 64px -12px rgba(0,0,0,.75);
+  --highlight-top:inset 0 1px 0 rgba(246,239,234,.04);
+  --dur-instant:100ms;--dur-fast:150ms;--dur-base:200ms;--dur-slow:280ms;--dur-exit:160ms;
+  --ease-out:cubic-bezier(.23,1,.32,1);--ease-in:cubic-bezier(.55,0,1,.45);--ease-in-out:cubic-bezier(.77,0,.175,1);--ease-standard:cubic-bezier(.2,0,0,1);
+  --press-scale:.97;--stagger:40ms;
+  --z-sticky:10;--z-dropdown:20;--z-toast:40;--z-dialog:100;
+  --hit-min:44px;--control-h:48px;--icon-sm:16px;--icon-md:20px;
+  /* 後台密度 */
+  --rail-w:240px;--row-h:52px;--card-pad:var(--sp-5);
+}

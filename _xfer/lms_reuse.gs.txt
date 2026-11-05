@@ -1,0 +1,136 @@
+/**
+ * 學院管理後台（topgod）資料中心擴充｜lms_reuse.gs（2.2.0 新增）
+ * 既有資料回用：LMS 表（members、counsels、site_plans、watch、level_history、orders、products、kinds、cworks）空白時，
+ * 從諮詢教材·專屬訂製既有資料推出同形資料，只讀不寫、不搬移、不刪除：
+ *  - 名冊（ROSTER_ 分片，rosterEntriesAll）→ members（id 為合成負數，與官網 mem_id 區分；3.6.0 書籤同步後由真實資料取代）
+ *  - 學員詳情快照（工作表「學員詳情」，studentAll32；書籤 3.5.x 逐位讀取）→ 級別、點數、到期、最後登入、課表、觀看時數、級別異動、儲值、課程目錄
+ *  - 預約（COUNSEL_ 分片，counselAll）＋快照 counsels → counsels
+ *  - 諮詢前置作業送出（名單索引）→ cworks（標題「諮詢前置作業」）
+ *  - LINE 綁定：既有 LINE_BIND_ 分片（lineBindingOf 同一份資料），lmsBoundMap_ 一次讀完
+ * 快取：CacheService 分段（每段 ≤ 90KB）5 分鐘；lms 寫入動作或同步後世代號 +1（lmsCacheBump_）
+ */
+var LMS_REUSE = { TABLES: ['members', 'counsels', 'site_plans', 'watch', 'level_history', 'orders', 'products', 'kinds', 'cworks'], KEY: 'lms_reuse_v1', SEC: 300, GEN_KEY: 'lms_gen', CHUNK: 90000 };
+
+/* ── 分段快取（CacheService 單鍵 100KB；JSON 切段，meta 記段數與世代） ── */
+function lmsCache_() { try { return CacheService.getScriptCache(); } catch (e) { return null; } }
+function lmsCacheGen_() { var c = lmsCache_(); if (!c) return '0'; try { return c.get(LMS_REUSE.GEN_KEY) || '0'; } catch (e) { return '0'; } }
+/** 寫入或同步後：世代 +1，所有彙總快取自然失效 */
+function lmsCacheBump_() { var c = lmsCache_(); if (!c) return; try { c.put(LMS_REUSE.GEN_KEY, String((Number(c.get(LMS_REUSE.GEN_KEY)) || 0) + 1), 21600); } catch (e) { /* ignore */ } }
+function lmsCacheGet_(key) {
+  var c = lmsCache_(); if (!c) return null;
+  try {
+    var k = key + ':' + lmsCacheGen_(), meta = c.get(k + ':m'); if (!meta) return null;
+    var m = JSON.parse(meta), keys = []; for (var i = 0; i < m.n; i++) keys.push(k + ':' + i);
+    var parts = c.getAll(keys), s = '';
+    for (var j = 0; j < m.n; j++) { if (parts[k + ':' + j] == null) return null; s += parts[k + ':' + j]; }
+    return JSON.parse(s);
+  } catch (e) { return null; }
+}
+function lmsCachePut_(key, obj, sec) {
+  var c = lmsCache_(); if (!c) return false;
+  try {
+    var s = JSON.stringify(obj), k = key + ':' + lmsCacheGen_(), all = {}, n = 0;
+    if (s.length > LMS_REUSE.CHUNK * 20) return false;   /* 超過 1.8MB 不快取 */
+    for (var i = 0; i < s.length; i += LMS_REUSE.CHUNK) all[k + ':' + n++] = s.slice(i, i + LMS_REUSE.CHUNK);
+    all[k + ':m'] = JSON.stringify({ n: n, at: Date.now() });
+    c.putAll(all, sec || LMS_REUSE.SEC);
+    return true;
+  } catch (e) { return false; }
+}
+
+/* ── LINE 綁定：一次 getProperties 讀全部 LINE_BIND_ 分片（與 lineBindingOf 同一份資料、同一套判定） ── */
+function lmsBoundMap_() {
+  if (LMS_CACHE.boundMap) return LMS_CACHE.boundMap;
+  var map = {}; LMS_CACHE.boundMap = map;
+  try {
+    var pre = typeof LINE_API === 'object' && LINE_API.BIND_PREFIX ? LINE_API.BIND_PREFIX : 'LINE_BIND_';
+    var all = PropertiesService.getScriptProperties().getProperties();
+    Object.keys(all).forEach(function (k) {
+      if (k.indexOf(pre) !== 0) return;
+      var o = null; try { o = JSON.parse(all[k]); } catch (e) { o = null; }
+      if (!o || typeof o !== 'object') return;
+      Object.keys(o).forEach(function (h) { var e = o[h]; if (!e || !e.u) return; map[h] = e.v === 'nf' || e.b === 1 ? 'issue' : 'ok'; });
+    });
+  } catch (e) { console.error('lms boundMap ' + e.message); }
+  return map;
+}
+/** 綁定狀態 'ok'｜'issue'｜'no'（與 lmsBound_ 同義，但整批只讀一次） */
+function lmsBoundFast_(key) { if (!key) return null; var m = lmsBoundMap_(); return m[String(key).toLowerCase()] || 'no'; }
+
+/* ── 回用資料 ── */
+function lmsReuseId_(h) { return -parseInt(String(h).slice(0, 12), 16); }
+/** 快照日期 yyyy.mm.dd[ HH:MM] → yyyy-mm-dd[ HH:MM]（LMS 各處以 LMS_CORE.parse 解析） */
+function lmsReuseDate_(v) { var s = String(v || '').trim(); var m = /^(\d{4})[.\/-](\d{2})[.\/-](\d{2})(.*)$/.exec(s); return m ? m[1] + '-' + m[2] + '-' + m[3] + m[4] : s; }
+function lmsReuseEmpty_() { var o = { source: 'consult-prep', at: nowIso(), roster: 0, snapshots: 0 }; LMS_REUSE.TABLES.forEach(function (t) { o[t] = []; }); return o; }
+function lmsReuse_() {
+  if (LMS_CACHE.reuse) return LMS_CACHE.reuse;
+  var hit = lmsCacheGet_(LMS_REUSE.KEY);
+  if (hit && hit.members) { LMS_CACHE.reuse = hit; return hit; }
+  var out = lmsReuseEmpty_(); LMS_CACHE.reuse = out;
+  if (typeof rosterEntriesAll !== 'function') return out;
+  var roster = [], snaps = {}, cs = {};
+  try { roster = rosterEntriesAll() || []; } catch (e) { console.error('lms reuse roster ' + e.message); }
+  try { if (typeof studentAll32 === 'function') snaps = studentAll32() || {}; } catch (e2) { console.error('lms reuse snapshots ' + e2.message); }
+  try { if (typeof counselAll === 'function') cs = counselAll() || {}; } catch (e3) { console.error('lms reuse counsels ' + e3.message); }
+  var kindIdx = {}, prodIdx = {}, seen = {};
+  out.roster = roster.length;
+  roster.forEach(function (e) {
+    var h = String(e.key || '').toLowerCase(); if (!/^[0-9a-f]{16}$/.test(h) || seen[h]) return; seen[h] = 1;
+    var id = lmsReuseId_(h), s = snaps[h] && snaps[h].snap, pf = (s && s.profile) || {}, lv = pf.level || {}, pt = pf.points || {};
+    if (s) out.snapshots++;
+    out.members.push({ id: id, key: h, name: e.name, level: lv.name || lv.code || '', level_code: lv.code || '', expired_at: lmsReuseDate_(lv.expireAt), points: pt.balance != null ? pt.balance : '', point_expired_at: lmsReuseDate_(pt.expireAt),
+      status: pf.status || 'Y', registered_at: lmsReuseDate_(pf.registeredAt), last_login: lmsReuseDate_(pf.lastLoginAt), ig_id: '', highest_level: '', total_points: s ? (s.pointsSpent || '') : '', expiring_points: pt.balance != null ? pt.balance : '', reuse: true, synced_at: snaps[h] ? snaps[h].syncAt : '' });
+    /* 預約（COUNSEL_ 分片：nc＝下次諮詢） */
+    var ce = cs[h], nc = ce && ce.nc;
+    if (nc && nc.at) out.counsels.push({ id: 'cp:' + h + ':nc', mem_id: id, pro_id: '', type_name: nc.title || (nc.items || []).join('・') || '諮詢', status: nc.status || 'confirmed', created_at: lmsReuseDate_(ce.y), start_at: lmsReuseDate_(nc.at), url: nc.url || '', mode: nc.mode || '', place: nc.place || '', reuse: true });
+    if (!s) return;
+    var sn = s.counsels || {};
+    if (sn.next && sn.next.at && !(nc && nc.at)) out.counsels.push({ id: 'cp:' + h + ':n', mem_id: id, pro_id: '', type_name: sn.next.title || '諮詢', status: sn.next.status || 'confirmed', created_at: '', start_at: lmsReuseDate_(sn.next.at), url: sn.next.url || '', mode: sn.next.mode || '', place: sn.next.place || '', reuse: true });
+    (sn.past || []).forEach(function (p, i) { out.counsels.push({ id: 'cp:' + h + ':p' + i, mem_id: id, pro_id: '', type_name: p.title || '諮詢', status: 'done', created_at: '', start_at: lmsReuseDate_(p.at), minutes: p.minutes || 0, reuse: true }); });
+    /* 課表（本期＋歷次） */
+    var sp = s.studyPlan || {};
+    var plan = function (p, idx) { return { id: p.id || ('cp:' + h + ':plan' + idx), mem_id: id, status: p.siteState || p.state || '', created_at: lmsReuseDate_(p.appliedAt || p.startAt), start_at: lmsReuseDate_(p.startAt), due_at: lmsReuseDate_(p.dueAt), completed_at: lmsReuseDate_(p.completedAt),
+      tasks: (p.tasks || []).map(function (t) { return { id: t.id || '', pro_id: t.id || '', name: t.title, zone: t.zone || '', due_at: lmsReuseDate_(t.dueAt), done: !!t.done, bought_at: lmsReuseDate_(t.boughtAt) }; }), task_count: p.taskCount != null ? p.taskCount : (p.tasks || []).length, tasks_done: p.tasksDone != null ? p.tasksDone : (p.tasks || []).filter(function (t) { return t.done; }).length, reuse: true }; };
+    if (sp.current) out.site_plans.push(plan(sp.current, 0));
+    (sp.history || []).forEach(function (p, i) { out.site_plans.push(plan(p, i + 1)); });
+    /* 觀看時數（週）→ watch（秒） */
+    var st = s.study || {};
+    (st.weeks || []).forEach(function (w, i) { out.watch.push({ id: 'cp:' + h + ':w' + i, mem_id: id, pro_id: '', kind_id: '', seconds: Math.round((Number(w.hours) || 0) * 3600), last_at: lmsReuseDate_(w.start), days: {}, week_start: lmsReuseDate_(w.start), reuse: true }); });
+    /* 級別異動、儲值／購買 */
+    (s.levelHistory || []).forEach(function (l, i) { out.level_history.push({ id: 'cp:' + h + ':l' + i, mem_id: id, from_level: l.from, to_level: l.to, type: '', at: lmsReuseDate_(l.at), reuse: true }); });
+    (s.purchases || []).forEach(function (p, i) { out.orders.push({ id: 'cp:' + h + ':o' + i, mem_id: id, order_no: '', points: p.points, pay_amount: '', pay_status: 'Y', pay_method: '', created_at: lmsReuseDate_(p.at), title: p.title, reuse: true }); });
+    /* 課程目錄（四區 × 課程；已購人數） */
+    (s.zones || []).forEach(function (z) {
+      if (!kindIdx[z.name]) { kindIdx[z.name] = { id: 'cp:kind:' + z.name, name: z.name, parent_id: '', reuse: true }; out.kinds.push(kindIdx[z.name]); }
+      (z.courses || []).forEach(function (c) {
+        var pid = c.id || ('cp:pro:' + z.name + ':' + c.title);
+        if (!prodIdx[pid]) { prodIdx[pid] = { id: pid, name: c.title, kind_id: kindIdx[z.name].id, status: c.onShelf ? 'Y' : 'N', zone: z.name, buyers: 0, reuse: true }; out.products.push(prodIdx[pid]); }
+        if (c.count > 0) prodIdx[pid].buyers++;
+      });
+    });
+  });
+  /* 諮詢前置作業送出（名單索引）→ cworks */
+  try {
+    if (typeof indexSheet === 'function' && typeof schema === 'function' && typeof rosterHash === 'function') {
+      var sh = indexSheet(), last = sh.getLastRow(), S = schema(), byKey = {};
+      out.members.forEach(function (m) { byKey[m.key] = m.id; });
+      if (last >= 2) sh.getRange(2, 1, last - 1, 9).getValues().forEach(function (r) {
+        if (!r[0]) return;
+        var k = S.rosterKey(String(r[3] || '').replace(/^'/, '')), hh = k ? rosterHash(k) : '';
+        if (!hh || byKey[hh] == null) return;
+        var at = r[1] instanceof Date ? LMS_CORE.iso(r[1].getTime()) : String(r[1] || '');
+        out.cworks.push({ id: 'cp:work:' + String(r[0]), mem_id: byKey[hh], counsel_id: '', counsel_title: '諮詢前置作業', title: '諮詢前置作業（' + String(r[5] || '') + '）', deadline_at: '', upload_at: at, status: String(r[8] || ''), receipt: String(r[0]), reuse: true });
+      });
+    }
+  } catch (e4) { console.error('lms reuse works ' + e4.message); }
+  lmsCachePut_(LMS_REUSE.KEY, out, LMS_REUSE.SEC);
+  return out;
+}
+/** 回用狀態（lms_bootstrap.reuse、設定頁顯示）：{ active, roster, snapshots, counts } */
+function lmsReuseState_() {
+  var active = {}; LMS_REUSE.TABLES.forEach(function (t) { active[t] = lmsRows_(t, true).length === 0; });
+  var any = Object.keys(active).some(function (t) { return active[t]; });
+  if (!any) return { active: false };
+  var r = lmsReuse_(), counts = {}; LMS_REUSE.TABLES.forEach(function (t) { counts[t] = active[t] ? r[t].length : 0; });
+  return { active: true, tables: active, roster: r.roster, snapshots: r.snapshots, counts: counts, source: r.source, at: r.at };
+}

@@ -1,0 +1,290 @@
+/**
+ * 學院管理後台（topgod）資料中心擴充｜lms_wb.gs（v1 新增）
+ * 寫回佇列：topgod 只建工單與審核；書籤（學院連線 3.6.0）在已登入的官網後台執行；資料中心持有狀態
+ *  狀態機：pending → approved → leased（租約 10 分鐘）→ done｜failed｜conflict｜dryrun；pending → rejected｜manual；failed／conflict／dryrun → approved（重試，最多 3 次）｜abandoned；任何 → cancelled
+ *  冪等：idemKey 唯一（LockService 查重；同 idemKey 回既有工單）
+ *  乾跑：live = settings.writeback.live || memId ∈ testMembers（預設 [2]）；live=false 時書籤只回報將送出的請求與目前值
+ *  類型、端點、比對方式、撤銷範本、核准角色：shared/lms-schema.js WB_TYPES（唯一契約）
+ */
+var LMS_WB = { TABLE: 'wb_jobs', CLAIM_MAX: 40 };
+
+function lmsWbRows_() { return lmsRows_(LMS_WB.TABLE); }
+function lmsWbGet_(id) { return lmsGet_(LMS_WB.TABLE, id); }
+function lmsWbS_() { return LMS_SCHEMA.writebackOf(lmsSettings_()); }
+function lmsWbLock_(fn) { var l = LockService.getScriptLock(); l.waitLock(20000); try { LMS_CACHE['t_' + LMS_WB.TABLE] = null; return fn(); } finally { l.releaseLock(); } }
+function lmsWbNewIds_(n) {
+  var day = Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyyMMdd'), pre = 'WB-' + day + '-', max = 0;
+  lmsWbRows_().forEach(function (j) { if (String(j.id).indexOf(pre) === 0) max = Math.max(max, Number(String(j.id).slice(pre.length)) || 0); });
+  var out = []; for (var i = 1; i <= n; i++) out.push(pre + ('000' + (max + i)).slice(-4));
+  return out;
+}
+function lmsWbHist_(j, what, me, note) { j.history = (j.history || []).concat([{ at: nowIso(), by: me ? me.email : 'system', what: what, note: note ? cleanText(note).slice(0, 200) : '' }]).slice(-30); }
+function lmsWbPathRe_(tpl) { return new RegExp('^' + String(tpl).replace(/[.*+?^$()|[\]\\]/g, '\\$&').replace(/\\\[|\\\]/g, function (m) { return m; }).replace(/\{\w+\}/g, '[^/?&]+') + '$'); }
+
+/**
+ * 建立多筆工單（同一把鎖、同一次寫入）；spec：{ type, memId, params?, source:{type,id}, idemKey?, label?, dependsOnIdx?, dependsOn?, status?, undoOf? }
+ *  → [{ job, existed }]
+ */
+function lmsWbCreateMany_(specs, me, opt) {
+  opt = opt || {};
+  if (!specs.length) return [];
+  return lmsWbLock_(function () {
+    var S = lmsSettings_(), all = lmsWbRows_(), byIdem = {};
+    all.forEach(function (j) { if (j.idemKey && j.status !== 'cancelled') byIdem[j.idemKey] = j; });
+    var built = specs.map(function (sp) {
+      var T = LMS_SCHEMA.WB_TYPES[sp.type];
+      if (!T) throw apiError('不支援的寫回類型：' + sp.type, 'ERR_VALIDATION');
+      if (T.undoOnly && !opt.undo) throw apiError('「' + T.label + '」只能由撤銷測試寫入產生', 'ERR_VALIDATION');
+      var memId = Number(sp.memId); if (!memId) throw apiError('寫回工單缺少學姐 memId', 'ERR_VALIDATION');
+      var p = {}; for (var k in (sp.params || {})) p[k] = sp.params[k]; p.memId = memId; if (sp.idemKey) p.idemKey = String(sp.idemKey).slice(0, 160);
+      var b = LMS_SCHEMA.wbBuild(sp.type, p);
+      if (sp.endpoint) {   /* 明列端點：須與類型一致 */
+        if (String(sp.endpoint.method || '').toUpperCase() !== T.method || !lmsWbPathRe_(T.path).test(String(sp.endpoint.path || ''))) throw apiError('工單端點與類型「' + T.label + '」不符', 'ERR_VALIDATION');
+        b.endpoint = { method: T.method, path: String(sp.endpoint.path).slice(0, 200) };
+        if (sp.body && typeof sp.body === 'object') b.body = LMS_SCHEMA.stripSensitive(sp.body);
+        if (sp.expect && typeof sp.expect === 'object') { b.expect.oldValue = sp.expect.oldValue != null ? sp.expect.oldValue : b.expect.oldValue; }
+        if (sp.newValue !== undefined) b.newValue = sp.newValue;
+        if (sp.undo !== undefined) b.undo = sp.undo;
+      }
+      return { sp: sp, T: T, b: b, memId: memId, p: p };
+    });
+    var fresh = built.filter(function (x) { return !byIdem[x.b.idemKey]; });
+    var ids = lmsWbNewIds_(fresh.length), k2 = 0, now = nowIso(), out = [], put = [];
+    built.forEach(function (x, i) {
+      var ex = byIdem[x.b.idemKey];
+      if (ex) { out.push({ job: ex, existed: true }); return; }
+      var mem = lmsGet_('members', x.memId) || {};
+      var j = { id: ids[k2++], type: x.sp.type, manualOnly: !!x.T.manualOnly, cat: x.b.cat, memId: x.memId, memberName: mem.name || '', target: x.b.target, endpoint: x.b.endpoint, body: x.b.body, expect: x.b.expect, newValue: x.b.newValue,
+        source: x.sp.source ? { type: String(x.sp.source.type || '').slice(0, 30), id: String(x.sp.source.id == null ? '' : x.sp.source.id).slice(0, 80) } : { type: 'manual', id: '' },
+        idemKey: x.b.idemKey, undo: x.b.undo, undoOf: x.sp.undoOf || '', dependsOn: x.sp.dependsOn || '', live: LMS_SCHEMA.wbLiveFor(S, x.memId), status: x.sp.status === 'approved' ? 'approved' : 'pending',
+        params: x.p || {}, lease: '', leaseUntil: '', attempts: 0, retries: 0, result: null, siteRef: {}, history: [], createdAt: now, createdBy: me ? me.email : 'system', approvedAt: '', approvedBy: '', reason: '', label: cleanText(x.sp.label || x.T.label).slice(0, 80), proxy: x.T.proxy, loc: x.T.loc };
+      if (j.status === 'approved') { j.approvedAt = now; j.approvedBy = me ? me.email : 'system'; }
+      lmsWbHist_(j, 'create', me, x.sp.label || '');
+      byIdem[j.idemKey] = j; out.push({ job: j, existed: false }); put.push(j);
+      x.job = j;
+    });
+    /* 依賴：同一批內以索引指定（課表堂次依賴課表建立） */
+    built.forEach(function (x) { if (x.job && x.sp.dependsOnIdx != null && built[x.sp.dependsOnIdx] && built[x.sp.dependsOnIdx].job) x.job.dependsOn = built[x.sp.dependsOnIdx].job.id; else if (x.job && x.sp.dependsOnIdx != null && built[x.sp.dependsOnIdx]) x.job.dependsOn = byIdem[built[x.sp.dependsOnIdx].b.idemKey].id; });
+    /* 折扣券等沒有讀取路徑的類型：建立即改人工＋待辦（書籤不領） */
+    var man = put.filter(function (j) { return j.manualOnly; });
+    man.forEach(function (j) { j.status = 'manual'; j.reason = '官網沒有可比對的讀取路徑，請人工建立'; lmsWbHist_(j, 'manual', null, j.reason); });
+    lmsPut_(LMS_WB.TABLE, put);
+    if (man.length) lmsWbTodos_(man, '只能人工');
+    return out;
+  });
+}
+/** lms_wb_create { type, memId, params?, source, idemKey?, label?, endpoint?, body?, expect?, newValue?, undo? } */
+function lmsWbCreate_(req, me) {
+  var params = req.params || {};
+  /* v1.1（WS2 R2-5）：延後此堂帶 taskId '{siteRef.task_id}' → 以課表回填的官網堂次 id 代入；還沒寫回成功就拒絕 */
+  if (String(req.type) === 'plan_task_patch' && /^\{(siteRef\.)?task_id\}$/.test(String(params.taskId || '')) && req.source && req.source.type === 'plan') {
+    var tid = typeof lmsPlanTaskIdOf_ === 'function' ? lmsPlanTaskIdOf_(req.source.id, params.product_id) : null;
+    if (tid == null) throw apiError('這一堂還沒寫回官網（沒有官網堂次 id），請等課表寫回成功後再延後', 'ERR_STATE');
+    var cp = {}; for (var k in params) cp[k] = params[k]; cp.taskId = tid; params = cp;
+  }
+  /* 2.2.0：校長可直接建立「只能由撤銷產生」的類型（例如刪除自己剛加的課表堂次），帶 undo:true */
+  var r = lmsWbCreateMany_([{ type: String(req.type || ''), memId: req.memId, params: params, source: req.source, idemKey: req.idemKey, label: req.label, endpoint: req.endpoint, body: req.body, expect: req.expect, newValue: req.newValue, undo: req.undo }], me, { undo: req.undo === true && me && me.role === 'principal' })[0];
+  return { job: r.job, existed: r.existed };
+}
+/** lms_wb_list { status?, type?, memId?, source? } */
+function lmsWbList_(req) {
+  var rows = lmsWbRows_().slice(), st = req.status ? [].concat(req.status) : null;
+  var counts = { byStatus: {}, byCat: {} };
+  rows.forEach(function (j) { counts.byStatus[j.status] = (counts.byStatus[j.status] || 0) + 1; if (j.status === 'approved' || j.status === 'pending') counts.byCat[j.cat] = (counts.byCat[j.cat] || 0) + 1; });
+  if (st) rows = rows.filter(function (j) { return st.indexOf(j.status) >= 0; });
+  if (req.type) rows = rows.filter(function (j) { return j.type === req.type; });
+  if (req.memId) rows = rows.filter(function (j) { return Number(j.memId) === Number(req.memId); });
+  if (req.source) rows = rows.filter(function (j) { return j.source && j.source.type === req.source.type && (req.source.id == null || String(j.source.id) === String(req.source.id)); });
+  var rank = { failed: 0, conflict: 1, leased: 2, approved: 3, pending: 4 };
+  rows.sort(function (a, b) { var ra = rank[a.status] != null ? rank[a.status] : 9, rb = rank[b.status] != null ? rank[b.status] : 9; return ra - rb || String(b.createdAt).localeCompare(String(a.createdAt)); });
+  var out = { jobs: rows.slice(0, 500), counts: counts };
+  /* v1.1（WS1 R1-2）：工單以外的待審（派發批次、課表定案、補交核准）與今日寫回統計 */
+  if (typeof lmsWbApprovals_ === 'function') { out.approvals = lmsWbApprovals_(); out.today = lmsWbToday_(lmsWbRows_()); }
+  return out;
+}
+function lmsWbIds_(req) { var ids = Array.isArray(req.ids) ? req.ids : (req.id != null ? [req.id] : []); if (!ids.length) throw apiError('請指定工單', 'ERR_VALIDATION'); return ids.slice(0, 200).map(String); }
+/** 逐筆轉態：fn(job) 回傳錯誤字串＝拒絕 */
+function lmsWbMove_(req, me, to, check, after) {
+  var ids = lmsWbIds_(req);
+  return lmsWbLock_(function () {
+    var jobs = [], denied = [], put = [];
+    ids.forEach(function (id) {
+      var j = lmsWbGet_(id);
+      if (!j) { denied.push({ id: id, reason: '找不到工單' }); return; }
+      var why = check ? check(j) : '';
+      if (!why && !LMS_SCHEMA.wbCanMove(j.status, to)) why = '目前狀態「' + (LMS_SCHEMA.ENUMS.WB_STATUS_LABEL[j.status] || j.status) + '」不能改為「' + (LMS_SCHEMA.ENUMS.WB_STATUS_LABEL[to] || to) + '」';
+      if (why) { denied.push({ id: id, reason: why }); return; }
+      j.status = to; if (to === 'approved') { j.approvedAt = nowIso(); j.approvedBy = me.email; j.lease = ''; j.leaseUntil = ''; }
+      if (req.reason) j.reason = cleanText(req.reason).slice(0, 200);
+      lmsWbHist_(j, to, me, req.reason);
+      put.push(j); jobs.push(j);
+    });
+    lmsPut_(LMS_WB.TABLE, put);
+    var extra = after ? after(jobs, me) : {};
+    var out = { jobs: jobs, denied: denied }; for (var k in extra) out[k] = extra[k];
+    return out;
+  });
+}
+function lmsWbApproveCheck_(me) { return function (j) { return LMS_SCHEMA.wbCanApprove(me.role, j.type) ? '' : '「' + j.label + '」只有校長可以核准'; }; }
+function lmsWbApprove_(req, me) { return lmsWbMove_(req, me, 'approved', function (j) { return j.status !== 'pending' ? '只有待核准的工單可以核准' : lmsWbApproveCheck_(me)(j); }); }
+function lmsWbReject_(req, me) { return lmsWbMove_(req, me, 'rejected', lmsWbApproveCheck_(me), function (jobs, m) { lmsWbCardsBlocked_(jobs, 'cancelled', '寫回工單已退回'); return {}; }); }
+function lmsWbManual_(req, me) { return lmsWbMove_(req, me, 'manual', null, function (jobs, m) { lmsWbCardsBlocked_(jobs, 'paused', '工單改人工：官網改好後到通知佇列放行'); return { todos: lmsWbTodos_(jobs, '改人工') }; }); }
+function lmsWbRetry_(req, me) {
+  return lmsWbMove_(req, me, 'approved', function (j) {
+    if (['failed', 'conflict', 'dryrun'].indexOf(j.status) < 0) return '只有失敗、衝突或乾跑完成的工單可以重試';
+    if (j.status === 'failed' && (Number(j.retries) || 0) >= LMS_SCHEMA.WB.MAX_RETRY) return '已重試 ' + LMS_SCHEMA.WB.MAX_RETRY + ' 次，請放棄並轉人工';
+    return lmsWbApproveCheck_(me)(j);
+  }, function (jobs) { jobs.forEach(function (j) { j.retries = (Number(j.retries) || 0) + 1; }); lmsPut_(LMS_WB.TABLE, jobs); return {}; });
+}
+/** lms_wb_cancel：取消這筆（不建人工待辦）；書籤執行中（leased）不能取消 */
+function lmsWbCancel_(req, me) { return lmsWbMove_(req, me, 'cancelled', function (j) { return j.status === 'leased' ? '書籤正在執行這筆，請稍候再取消' : ''; }, function (jobs) { lmsWbCardsBlocked_(jobs, 'cancelled', '官網更新已取消'); return {}; }); }
+function lmsWbAbandon_(req, me) { return lmsWbMove_(req, me, 'abandoned', null, function (jobs) { lmsWbCardsBlocked_(jobs, 'cancelled', '寫回工單已放棄'); return { todos: lmsWbTodos_(jobs, '放棄寫回') }; }); }
+/** 改人工／放棄：產生工作台待辦（官網人工改法路徑） */
+function lmsWbTodos_(jobs, why) {
+  var todos = jobs.map(function (j) { return { id: 'wb-' + j.id, kind: 'wb_manual', title: (j.memberName || '學姐') + '｜' + j.label + '（' + why + '）', detail: '官網後台 › ' + (j.loc || '') + '\n' + j.endpoint.method + ' ' + j.endpoint.path + (j.newValue != null ? '\n要寫入：' + j.newValue : ''), wb: j.id, mem_id: j.memId, at: nowIso() }; });
+  lmsPut_('todos', todos);
+  return todos;
+}
+/** 等待工單的圖卡：工單被退回／放棄 → 取消；改人工 → 暫停（人工放行） */
+function lmsWbCardsBlocked_(jobs, status, reason) {
+  var ids = {}; jobs.forEach(function (j) { ids[j.id] = 1; });
+  var rows = lmsRows_('queue').filter(function (q) { return q.status === 'waiting_wb' && (q.wbIds || []).some(function (w) { return ids[w]; }); });
+  rows.forEach(function (q) { q.status = status; q.reason = reason; });
+  lmsPut_('queue', rows);
+}
+/** 工單成功 → 放行全部工單都成功的圖卡 */
+function lmsWbReleaseCards_() {
+  var J = {}; lmsWbRows_().forEach(function (j) { J[j.id] = j; });
+  var rows = lmsRows_('queue').filter(function (q) { return q.status === 'waiting_wb' && (q.wbIds || []).length && q.wbIds.every(function (w) { return J[w] && (J[w].status === 'done' || J[w].status === 'dryrun'); }); });
+  rows.forEach(function (q) { q.status = 'scheduled'; q.reason = '寫回成功，已放行'; if (LMS_CORE.parse(q.sendAt) < Date.now()) q.sendAt = nowIso(); });
+  lmsPut_('queue', rows);
+  return rows.length;
+}
+
+/* ── 書籤：領取、回報、釋放 ─────────────────────────────── */
+/** wb_claim { bmVersion, limit } → { jobs }（依執行順序；租約 10 分鐘；依賴未完成的堂次不領） */
+function lmsWbClaim_(req) {
+  return lmsWbLock_(function () {
+    var S = lmsSettings_(), now = Date.now(), all = lmsWbRows_(), J = {}; all.forEach(function (j) { J[j.id] = j; });
+    var limit = Math.max(1, Math.min(LMS_WB.CLAIM_MAX, Number(req.limit) || 20));
+    var cand = all.filter(function (j) { return j.status === 'approved' || (j.status === 'leased' && LMS_CORE.parse(j.leaseUntil) < now); })
+      .sort(function (a, b) { return LMS_SCHEMA.wbOrderOf(a.type) - LMS_SCHEMA.wbOrderOf(b.type) || String(a.createdAt).localeCompare(String(b.createdAt)) || String(a.id).localeCompare(String(b.id)); });
+    var picked = [], inBatch = {}, refs = {};
+    cand.forEach(function (j) {
+      if (picked.length >= limit) return;
+      if (j.dependsOn) {
+        var p = J[j.dependsOn];
+        if (!p) return;
+        if (p.status === 'done' && p.siteRef) { lmsWbFillRef_(j, p); refs[p.id] = p.siteRef; }
+        else if (!inBatch[p.id]) return;   /* 上一步還沒成功：等下次 */
+      }
+      picked.push(j); inBatch[j.id] = 1;
+    });
+    var until = LMS_CORE.iso(now + LMS_SCHEMA.WB.LEASE_MS);
+    picked.forEach(function (j) { j.status = 'leased'; j.lease = Utilities.getUuid(); j.leaseUntil = until; j.live = LMS_SCHEMA.wbLiveFor(S, j.memId); j.bmVersion = String(req.bmVersion || '').slice(0, 12); lmsWbHist_(j, 'leased', null, req.bmVersion ? '書籤 ' + req.bmVersion : ''); });
+    lmsPut_(LMS_WB.TABLE, picked);
+    var W = LMS_SCHEMA.writebackOf(S);
+    return { jobs: picked.map(function (j) { return { id: j.id, type: j.type, label: j.label, memId: j.memId, lease: j.lease, leaseUntil: j.leaseUntil, endpoint: j.endpoint, body: j.body, expect: j.expect, newValue: j.newValue, live: j.live, order: LMS_SCHEMA.wbOrderOf(j.type), dependsOn: j.dependsOn || '', siteRef: j.siteRef || {}, testPrefix: j.live && j.type === 'points' && !W.live ? LMS_SCHEMA.WB.TEST_PREFIX : '' }; }),
+      testMembers: W.testMembers, liveAll: W.live, refs: refs, gapMs: LMS_SCHEMA.WB.GAP_MS, backoffMs: LMS_SCHEMA.WB.BACKOFF_MS };
+  });
+}
+/** 上一步回填的官網 id 代入（{plan_id}） */
+function lmsWbFillRef_(j, parent) {
+  var ref = parent.siteRef || {};
+  if (ref.plan_id != null && j.body && j.body.plan_id === '{plan_id}') j.body.plan_id = ref.plan_id;
+}
+/** 只留比對欄位的值（不存整筆回應） */
+function lmsWbPick_(v, field) {
+  if (v == null) return null;
+  if (typeof v === 'object') {
+    if (field && field !== '$count') { var cur = v; String(field).split('.').forEach(function (k) { cur = cur && typeof cur === 'object' ? cur[k] : undefined; }); v = cur; }
+    else v = null;
+  }
+  if (v == null) return null;
+  return typeof v === 'number' || typeof v === 'boolean' ? v : String(v).slice(0, 200);
+}
+/** wb_result { id, lease, result:{ before, status, response, after, verified, error, attempts, dryRun } } → { job } */
+function lmsWbResult_(req) {
+  return lmsWbLock_(function () {
+    var j = lmsWbGet_(String(req.id || ''));
+    if (!j) throw apiError('找不到工單', 'ERR_NOT_FOUND');
+    if (j.status !== 'leased' || !req.lease || String(req.lease) !== String(j.lease)) throw apiError('工單租約不符（可能已被另一個書籤領取）', 'ERR_LEASE');
+    if (LMS_CORE.parse(j.leaseUntil) < Date.now()) throw apiError('工單租約已過期，結果不採用', 'ERR_LEASE');
+    var r = req.result || {}, f = j.expect && j.expect.field, T = LMS_SCHEMA.WB_TYPES[j.type] || {};
+    var res = { before: lmsWbPick_(r.before, f), after: lmsWbPick_(r.after, f), httpStatus: Number(r.httpStatus || (r.response && r.response.status) || (typeof r.status === 'number' ? r.status : 0)) || 0, assumed: !!(r.response && r.response.assumed), note: cleanText(r.note).slice(0, 200), verified: r.verified === true, error: cleanText(r.error).slice(0, 300), attempts: Math.max(0, Math.min(10, Number(r.attempts) || 0)), dryRun: !!r.dryRun || !j.live, at: nowIso(), request: r.dryRun || !j.live ? { method: j.endpoint.method, path: j.endpoint.path } : null };
+    var st = String(r.outcome || (typeof r.status === 'string' ? r.status : '') || '');
+    var to;
+    if (res.dryRun) to = 'dryrun';
+    else if (st === 'conflict') to = 'conflict';
+    else if (st === 'done' || (!st && res.verified)) to = res.verified || (j.expect && j.expect.cmp === 'none' && ((r.response && r.response.id != null) || (j.siteRef && j.siteRef[T.siteRef] != null))) ? 'done' : 'failed';
+    else to = 'failed';
+    if (to === 'failed' && !res.error) res.error = st === 'done' ? '寫入後驗證不符' : '官網未回應或回應錯誤';
+    if (to === 'conflict' && !res.error) res.error = '官網目前值與預期不符，未寫入';
+    if (r.response && r.response.id != null && T.siteRef) { j.siteRef = j.siteRef || {}; j.siteRef[T.siteRef] = r.response.id; }
+    if (r.siteRef && typeof r.siteRef === 'object') { j.siteRef = j.siteRef || {}; ['plan_id', 'task_id', /* v1.1 */ 'meeting_id', 'cwork_id'].forEach(function (k) { if (r.siteRef[k] != null && (typeof r.siteRef[k] === 'number' || /^[\w-]{1,40}$/.test(String(r.siteRef[k])))) j.siteRef[k] = r.siteRef[k]; }); }
+    if (j.type === 'plan_task' && j.body && j.body.plan_id && j.body.plan_id !== '{plan_id}') { j.siteRef = j.siteRef || {}; j.siteRef.plan_id = j.body.plan_id; }
+    if (r.planId != null && j.type === 'plan_task') { j.siteRef = j.siteRef || {}; j.siteRef.plan_id = r.planId; if (j.body.plan_id === '{plan_id}') j.body.plan_id = r.planId; }
+    j.status = to; j.result = res; j.attempts = (Number(j.attempts) || 0) + (res.attempts || 1); j.lease = ''; j.leaseUntil = '';
+    lmsWbHist_(j, to, null, res.error || (res.dryRun ? '乾跑' : ''));
+    var put = [j];
+    if (to === 'done' && T.siteRef === 'plan_id') lmsWbRows_().forEach(function (c) { if (c.dependsOn === j.id) { lmsWbFillRef_(c, j); put.push(c); } });
+    lmsPut_(LMS_WB.TABLE, put);
+    if (to === 'done' || to === 'dryrun') { lmsWbReleaseCards_(); lmsWbAfterDone_(j); }
+    return { job: j };
+  });
+}
+/** 工單成功後：獎勵派發狀態 */
+function lmsWbAfterDone_(j) {
+  try { if (j.source && j.source.type === 'grant' && typeof lmsGrantWbDone_ === 'function') lmsGrantWbDone_(j); } catch (e) { console.error('lms wb after ' + e.message); }
+  /* v1.1（WS2 R2-5）：課表堂次成功 → 回填 plan.items[n].siteTaskId；課表建立成功 → plan.sitePlanId */
+  try { if (j.source && j.source.type === 'plan' && j.status === 'done' && typeof lmsPlanSiteRef_ === 'function') lmsPlanSiteRef_(j); } catch (e2) { console.error('lms wb plan ref ' + e2.message); }
+}
+/** wb_release { ids }：書籤中止時釋放租約 */
+function lmsWbRelease_(req) {
+  var ids = (Array.isArray(req.ids) ? req.ids : []).slice(0, 200).map(String);
+  return lmsWbLock_(function () {
+    var put = [];
+    ids.forEach(function (id) { var j = lmsWbGet_(id); if (j && j.status === 'leased') { j.status = 'approved'; j.lease = ''; j.leaseUntil = ''; lmsWbHist_(j, 'released', null, '書籤中止'); put.push(j); } });
+    lmsPut_(LMS_WB.TABLE, put);
+    return { released: put.length };
+  });
+}
+
+/* ── 撤銷測試寫入（限 testMembers；只限已真寫成功） ──────────── */
+/** lms_wb_undo { id | ids | source:{type,id} } → { jobs, denied } */
+function lmsWbUndo_(req, me) {
+  var W = lmsWbS_(), src = lmsWbRows_().filter(function (j) {
+    if (req.source) return j.source && j.source.type === req.source.type && String(j.source.id) === String(req.source.id);
+    var ids = Array.isArray(req.ids) ? req.ids.map(String) : [String(req.id || '')];
+    return ids.indexOf(String(j.id)) >= 0;
+  });
+  if (!src.length) throw apiError('找不到要撤銷的工單', 'ERR_NOT_FOUND');
+  var denied = [], specs = [];
+  src.forEach(function (j) {
+    if (W.testMembers.indexOf(Number(j.memId)) < 0) { denied.push({ id: j.id, reason: '只能撤銷測試帳號（testMembers）的寫入' }); return; }
+    if (j.status !== 'done' || !j.result || j.result.dryRun) { denied.push({ id: j.id, reason: '只能撤銷已真寫成功的工單' }); return; }
+    if (!j.undo) { denied.push({ id: j.id, reason: '「' + j.label + '」沒有撤銷方式，請人工處理' }); return; }
+    var p = {}, ok = true;
+    for (var k in (j.undo.params || {})) {
+      var v = j.undo.params[k], m = typeof v === 'string' ? /^\{siteRef\.(\w+)\}$/.exec(v) : null;
+      if (m) { v = j.siteRef && j.siteRef[m[1]]; if (v == null) ok = false; }
+      p[k] = v;
+    }
+    if (!ok) { denied.push({ id: j.id, reason: '缺少官網回填的 id，無法撤銷' }); return; }
+    specs.push({ type: j.undo.type, memId: j.memId, params: p, source: { type: 'undo', id: j.id }, idemKey: 'undo:' + j.id, undoOf: j.id, label: '撤銷：' + j.label, status: 'approved' });
+  });
+  var made = specs.length ? lmsWbCreateMany_(specs, me, { undo: true }) : [];
+  return { jobs: made.map(function (x) { return x.job; }), denied: denied };
+}
+
+var LMS_ACTIONS_WB = {
+  lms_wb_create: function (req, me) { return lmsWbCreate_(req, me); },
+  lms_wb_list: function (req) { return lmsWbList_(req); },
+  lms_wb_approve: function (req, me) { return lmsWbApprove_(req, me); },
+  lms_wb_reject: function (req, me) { return lmsWbReject_(req, me); },
+  lms_wb_manual: function (req, me) { return lmsWbManual_(req, me); },
+  lms_wb_retry: function (req, me) { return lmsWbRetry_(req, me); },
+  lms_wb_abandon: function (req, me) { return lmsWbAbandon_(req, me); },
+  lms_wb_cancel: function (req, me) { return lmsWbCancel_(req, me); },
+  lms_wb_undo: function (req, me) { return lmsWbUndo_(req, me); }
+};

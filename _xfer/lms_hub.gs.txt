@@ -1,0 +1,129 @@
+/**
+ * 學院管理後台（topgod）資料中心擴充｜lms_hub.gs（1.2.0 新增，只新增動作，不改既有行為）
+ *  - lms_dump：一次取回書籤同步的全部資料表＋各模組狀態（作業、諮詢、班級、活動獎勵、通知、活躍排行、設定）
+ *  - lms_state_put：各模組狀態逐筆寫入（每列＝ 表:主鍵 ＋ JSON）
+ *  - lms_flex_test：圖卡只發給設定頁的測試收件人（試營運；不發學姐）
+ *  - lms_wb_ticket：官網寫回工單（一律乾跑，由書籤回報乾跑結果）
+ *  - 2.1.0（契約 v1.1）：lms_dump 加 personal、log 與 members 推導欄；lms_state_put 已知鍵檢查；lms_flex_test to；書籤 start／done 開關同步紀錄
+ */
+var LMS_HUB_TABLES = ['members', 'products', 'kinds', 'works', 'cworks', 'counsels', 'site_plans', 'counsel_types', 'goods', 'activities',
+  /* 2.0.0（契約 v1）：新同步表與模組表 */ 'watch', 'orders', 'level_history', 'member_goods', 'reviews', 'grants', 'grant_batches', 'rules', 'ig', 'class_map', 'wb_jobs'];
+
+function lmsDump_() {
+  var out = {}, st = lmsSyncState_();
+  LMS_HUB_TABLES.forEach(function (t) { out[t] = lmsRows_(t); });
+  out.state = lmsRows_('state');
+  out.class_map = typeof lmsClassMap_ === 'function' ? lmsClassMap_() : out.class_map;   /* 第一次讀取時寫入起始值 */
+  out.sync = st;
+  out.bound = {};
+  out.members.forEach(function (m) { var b = lmsBound_(m.key); if (b) out.bound[m.id] = b; });
+  out.testRecipients = (lmsSettings_().testRecipients || []).map(function (r) { return { role: r.role, name: r.name, bound: lmsBound_(r.key) }; });
+  out.time = nowIso();
+  /* 2.1.0（WS2 R2-3）：個人提醒節點、已送出圖卡（近 1500 筆，不含略過紀錄）、學姐推導欄 */
+  out.personal = lmsRows_('personal');
+  out.log = lmsRows_('log').filter(function (l) { return !l.skipped; }).sort(function (a, b) { return String(b.sentAt || '').localeCompare(String(a.sentAt || '')); }).slice(0, 1500);
+  if (typeof lmsMembersDerived_ === 'function') out.members = lmsMembersDerived_(out.members);
+  return out;
+}
+
+/** lms_state_put { rows:[{ id:'表:主鍵', t, row }], del:['表:主鍵'] } */
+function lmsStatePut_(req, me) {
+  var rows = Array.isArray(req.rows) ? req.rows.slice(0, 400) : [], del = Array.isArray(req.del) ? req.del.slice(0, 400) : [];
+  var clean = rows.filter(function (r) { return r && r.id && r.t; }).map(function (r) { var id = String(r.id).slice(0, 120); return { id: id, t: String(r.t).slice(0, 40), row: typeof lmsStateRowCheck_ === 'function' ? lmsStateRowCheck_(id, r.row) : r.row, by: me.email, at: nowIso() }; });
+  var n = lmsPut_('state', clean);
+  var d = del.length ? lmsDel_('state', del.map(String)) : 0;
+  return { saved: n, deleted: d };
+}
+
+/** lms_flex_test { flex, alt, title, to?:'principal'|'assistant'|'both' }：只發給測試收件人（已綁定 @52grace）；to 只能在測試收件人（校長／助教）中挑 */
+function lmsFlexTest_(req, me) {
+  var to = req.to == null || req.to === '' ? 'both' : String(req.to);
+  if (LMS_SCHEMA.ENUMS.TEST_TO.indexOf(to) < 0) throw apiError('測試收件對象只能是 principal、assistant 或 both', 'ERR_VALIDATION');
+  var S = lmsSettings_(), rc = lmsTestRecipients_(S).filter(function (r) { return r.bound === 'ok' && (to === 'both' || r.role === to); });
+  if (!rc.length) throw apiError(to === 'both' ? '沒有已綁定 @52grace 的測試收件人，請先到設定頁選擇' : '設定頁沒有已綁定 @52grace 的' + (to === 'assistant' ? '助教' : '校長') + '測試收件人', 'ERR_VALIDATION');
+  if (!req.flex || typeof req.flex !== 'object') throw apiError('缺少圖卡內容', 'ERR_VALIDATION');
+  var flex = JSON.stringify(req.flex); if (flex.length > 45000) throw apiError('圖卡內容過大', 'ERR_VALIDATION');
+  var alt = '【試營運】' + cleanText(req.alt || req.title || '圖卡').slice(0, 300);
+  var cid = 'x' + LMS_CORE.hash(flex + Date.now()).slice(0, 11), meta = [], messages = [];
+  rc.forEach(function (r) {
+    messages.push({ key: r.key, name: r.name, text: alt, flex: JSON.parse(flex), tooLong: false });
+    meta.push({ card: { id: cid + '-' + r.key.slice(0, 6), mem_id: '', memberName: r.name, kind: String(req.kind || 'lms').slice(0, 20), title: alt, body: '', rows: [], items: [], to: { key: r.key, name: r.name }, trial: true, test: true, button: { url: String(req.url || ''), tracked: '' }, secondary: null, link: null, hero: '' }, sp: { nodes: [], test: true }, skipped: [] });
+  });
+  var out = lmsPushCards_(meta, messages, me, { manual: true, test: true });
+  return { sent: out.sent, results: out.results, recipients: rc.map(function (r) { return { role: r.role, name: r.name }; }) };
+}
+
+/** lms_wb_ticket { source, memId, memberName, requests:[{ method, path, body }] }：一律乾跑 */
+function lmsWbTicket_(req, me) {
+  var reqs = (Array.isArray(req.requests) ? req.requests : []).slice(0, 30).map(function (r) { return { method: String(r.method || 'POST').slice(0, 6), path: String(r.path || '').slice(0, 160), body: r.body || {} }; });
+  if (!reqs.length) throw apiError('缺少寫回內容', 'ERR_VALIDATION');
+  var t = { id: 'w' + LMS_CORE.hash(JSON.stringify(reqs) + Date.now()).slice(0, 11), source: String(req.source || '').slice(0, 60), mem_id: Number(req.memId) || '', memberName: cleanText(req.memberName).slice(0, 40), dryRun: true, status: 'pending', requests: reqs, at: nowIso(), by: me.email };
+  lmsPut_('tickets', [t]);
+  return { ticket: t };
+}
+
+/* ── 書籤同步專用金鑰（3.5.0 書籤在官網後台直接送資料中心） ──────────────
+ *  金鑰存在 Script Properties（LMS_BM_KEY）；只能呼叫 lms_bm 的同步動作（名冊、預約、教材點數、學員詳情、LMS 資料、寫回工單結果、書籤版本）
+ *  後台（topgod 或專屬訂製，已登入）可查看狀態、取得金鑰組成書籤、重新產生、撤銷；書籤不帶管理員登入 token
+ */
+var LMS_BM = { KEY: 'LMS_BM_KEY', OPS: ['start', 'roster', 'counsel', 'material', 'students', 'lms', 'ticket', 'done', /* 2.0.0 寫回佇列 */ 'wb_claim', 'wb_result', 'wb_release', /* 3.7.0 增量標記 */ 'marks'] };
+function lmsBmRead_() { try { var o = JSON.parse(PropertiesService.getScriptProperties().getProperty(LMS_BM.KEY) || 'null'); return o && o.key ? o : null; } catch (e) { return null; } }
+function lmsBmWrite_(o) { var p = PropertiesService.getScriptProperties(); if (o) p.setProperty(LMS_BM.KEY, JSON.stringify(o)); else p.deleteProperty(LMS_BM.KEY); }
+function lmsBmPublic_(o) { return o ? { exists: true, createdAt: o.createdAt || '', createdBy: o.createdBy || '', lastUsedAt: o.lastUsedAt || '', lastOp: o.lastOp || '', uses: o.uses || 0, tail: String(o.key).slice(-4) } : { exists: false }; }
+function lmsBmKeyStatus_() { return lmsBmPublic_(lmsBmRead_()); }
+function lmsBmKeyGet_(req, me) { var o = lmsBmRead_(); if (!o) o = lmsBmKeyNew_(req, me, true); return Object.assign ? Object.assign({ key: o.key }, lmsBmPublic_(o)) : { key: o.key }; }
+function lmsBmKeyNew_(req, me, raw) {
+  var o = { key: 'gbk_' + Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '').slice(0, 8), createdAt: nowIso(), createdBy: me ? me.email : '', lastUsedAt: '', uses: 0 };
+  lmsBmWrite_(o);
+  if (raw) return o;
+  var p = lmsBmPublic_(o); p.key = o.key; return p;
+}
+function lmsBmKeyRevoke_() { lmsBmWrite_(null); return { exists: false }; }
+/** lms_bm { syncKey, op, … }：只接受同步金鑰；不需要（也不接受）管理員 token */
+function lmsBm_(req) {
+  var o = lmsBmRead_(), k = String(req.syncKey || '');
+  if (!o || !k || k.length > 80 || !constantEquals(sha256Hex(o.key), sha256Hex(k))) throw apiError('同步金鑰無效或已撤銷，請到後台設定頁重新安裝書籤', 'ERR_AUTH');
+  var op = String(req.op || '');
+  if (LMS_BM.OPS.indexOf(op) < 0) throw apiError('書籤不支援這個動作', 'ERR_VALIDATION');
+  var me = { email: 'bookmarklet', name: '書籤（同步金鑰）', role: 'principal', realRole: 'principal', via: 'syncKey' };
+  var bump = function (act) { try { if (typeof SNAP_WRITES === 'object' && SNAP_WRITES[act]) snapBump(SNAP_WRITES[act]); } catch (e) { /* ignore */ } };
+  var out;
+  if (op === 'start') {
+    var terms = [];
+    try { if (typeof matProducts === 'function') terms = schema().materialPointTerms(matProducts()) || []; } catch (e) { terms = []; }
+    var seen = null;
+    try { if (typeof bookmarkletSeen === 'function' && req.bmVersion) seen = bookmarkletSeen({ kind: 'roster', version: String(req.bmVersion).slice(0, 12), role: 'principal' }); } catch (e) { seen = null; }
+    var wbp = lmsRows_('wb_jobs').filter(function (j) { return j.status === 'approved' || j.status === 'leased'; }).length;
+    var run = typeof lmsRunOpen_ === 'function' ? lmsRunOpen_(me, { role: req.role, scope: req.scope, bmVersion: req.bmVersion }) : null;   /* 2.1.0：一次書籤執行＝一筆同步紀錄 */
+    if (req.bmVersion && (req.role === 'assistant' || req.role === 'principal')) { var s0 = lmsGet_('sync_runs', 'state') || { id: 'state' }; s0.bmVersionByRole = s0.bmVersionByRole || {}; s0.bmVersionByRole[req.role] = String(req.bmVersion).slice(0, 12); lmsPut_('sync_runs', [s0]); }
+    out = { state: lmsSyncState_(), tickets: lmsRows_('tickets').filter(function (t) { return t.status === 'pending'; }), terms: terms, latest: seen ? seen.latest : '', outdated: !!(seen && seen.check && seen.check.outdated), wbPending: wbp, bmMin: LMS_SCHEMA.BM_VERSION_MIN, runId: run ? run.id : '' };
+  } else if (op === 'roster') {
+    var rows = Array.isArray(req.rows) ? req.rows : []; if (rows.length > 5000) throw apiError('名冊超過 5000 筆', 'ERR_VALIDATION');
+    out = rosterSync({ rows: rows }); bump('roster_sync'); if (typeof lmsRunNote_ === 'function') lmsRunNote_('roster', rows.length, me);
+  } else if (op === 'counsel') {
+    var cr = Array.isArray(req.rows) ? req.rows : []; if (cr.length > 3000) throw apiError('預約超過 3000 筆', 'ERR_VALIDATION');
+    out = need32('counselSync')({ rows: cr }); bump('counsel_sync'); if (typeof lmsRunNote_ === 'function') lmsRunNote_('counsel', cr.length, me);
+  } else if (op === 'material') {
+    var pts = Array.isArray(req.points) ? req.points : []; if (pts.length > 5000) throw apiError('點數紀錄超過 5000 筆', 'ERR_VALIDATION');
+    out = need32('materialOrderSync')({ points: pts }); bump('material_order_sync');
+  } else if (op === 'students') {
+    var st = Array.isArray(req.students) ? req.students : []; if (st.length > 50) throw apiError('學員詳情每批最多 50 位', 'ERR_VALIDATION');
+    out = need32('studentSync')({ source: String(req.source || ''), students: st, runId: String(req.runId || ''), final: req.final === true }); bump('student_sync');
+  } else if (op === 'lms') {
+    out = lmsSync_({ kind: req.kind, rows: req.rows, runId: req.runId, final: req.final, meta: req.meta }, me);
+  } else if (op === 'ticket') {
+    out = lmsTicketResult_({ id: req.id, result: req.result }, me);
+  } else if (op === 'wb_claim') {
+    out = lmsWbClaim_({ bmVersion: req.bmVersion, limit: req.limit });
+  } else if (op === 'wb_result') {
+    out = lmsWbResult_({ id: req.id, lease: req.lease, result: req.result });
+  } else if (op === 'wb_release') {
+    out = lmsWbRelease_({ ids: req.ids });
+  } else if (op === 'marks') {
+    out = lmsMarksSave_(req.marks);
+  } else if (op === 'done') {
+    out = { ok: true, run: typeof lmsRunClose_ === 'function' ? lmsRunClose_(req.errors) : null };
+  } else out = { ok: true };
+  var n = lmsBmRead_(); if (n) { n.lastUsedAt = nowIso(); n.lastOp = op; n.uses = (Number(n.uses) || 0) + 1; lmsBmWrite_(n); }
+  return out;
+}
