@@ -1,0 +1,6 @@
+作業檔案框內預覽用的第三方程式（原樣複製，本機渲染，不把檔案送到第三方）
+- docx-preview 0.3.5（docx-preview.min.js，Apache-2.0；需 JSZip）
+- JSZip 3.10.1（jszip.min.js，MIT／GPLv3 雙授權）
+- SheetJS Community Edition 0.18.5（xlsx.full.min.js，Apache-2.0；LICENSE-xlsx；含 XLS／CSV／Big5）
+- pptx-preview 1.0.7（pptx-preview.umd.js，npm 套件可免費自用／商用；PPTX 基本投影片渲染）
+來源：npm pack（2026.11.06）
