@@ -1093,6 +1093,22 @@ body.m .dlg .sd-form .miss{grid-template-columns:1fr}
 .msf-t .lbl{font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .msf-a{display:flex;justify-content:flex-end}
 @media (max-width:640px){.msf-r{grid-template-columns:minmax(0,1fr) auto}.msf-a{grid-column:1/-1;justify-content:flex-start}}
+/* ── v64.1 歷次課表（學姐頁 課程紀錄、排課頁 現有課表）：可展開列（自有 class，不沿用 .lsn 版面） ── */
+.phist{display:flex;flex-direction:column;gap:6px}
+.phist .ph{display:block;border:1px solid var(--line,rgba(255,255,255,.12));border-radius:10px;padding:0 12px}
+.phist .ph.cur{border-color:var(--gold,#c9a35c)}
+.phist summary{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0;cursor:pointer;list-style:none}
+.phist summary::-webkit-details-marker{display:none}
+.phist summary::before{content:'›';display:inline-block;transition:transform .15s;opacity:.7}
+.phist details[open] summary::before{transform:rotate(90deg)}
+.phist summary .pt{font-weight:600}
+.phist summary .r{margin-left:auto}
+.phist .phl{display:flex;flex-direction:column;gap:2px;padding:0 0 10px}
+.phist .phl > div{display:grid;grid-template-columns:28px 1fr auto auto;gap:8px;align-items:center;padding:4px 0}
+.phist .phn{opacity:.6;font-variant-numeric:tabular-nums}
+.phist .phc{display:flex;flex-direction:column;line-height:1.25;min-width:0}
+.phist .phc .ser{font-size:11px}
+@media (max-width:700px){.phist summary .r{margin-left:0;width:100%}.phist .phl > div{grid-template-columns:24px 1fr auto}.phist .phl > div .num{grid-column:2;font-size:12px}.phist .phl > div .stt{grid-column:3;grid-row:1}}
 
 /* src/ui/notify-state.css */
 /* v64 通知狀態（今日工作台、截止管理、學姐頁、校長必看共用）：已通知＝可點開實際圖卡；標記＝系統外通知；未通知＝珊瑚色提示 */
