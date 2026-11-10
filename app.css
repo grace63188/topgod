@@ -837,6 +837,16 @@ body.m .stu-r{margin-left:0;align-items:flex-start}
 .cnts3{display:flex;gap:10px}
 .cnts3>div{flex:1;min-width:0;padding:10px 12px;border-radius:12px;background:rgba(217,184,119,.05);box-shadow:inset 0 0 0 1px rgba(217,184,119,.12)}
 .cnts3 .big{font-size:24px}
+/* v66.6 課程統計共用（ui/coursesum.js）：已上過／已購／總數 */
+.zp.z3{grid-template-columns:minmax(72px,150px) 1fr auto;gap:10px}
+.zp.zleg{padding:0 0 2px;font-size:11.5px}
+.zp.z3 .num{white-space:nowrap;text-align:right}
+.hbar.hb2 u{position:absolute;left:0;top:0;height:100%;border-radius:3px;background:rgba(217,184,119,.32);text-decoration:none}
+.hbar.hb2 i{position:relative}
+.csum .csub{margin-top:2px;font-size:11.5px;opacity:.85}
+.csum-foot{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:8px;font-size:12px}
+.csum-foot b{font-weight:600;color:var(--text-2,inherit)}
+@media (max-width:560px){.zp.z3{grid-template-columns:minmax(64px,96px) 1fr auto;gap:8px}}
 .hbar{height:6px;border-radius:3px;background:rgba(217,184,119,.12);overflow:hidden;position:relative}
 .hbar i{display:block;height:100%;border-radius:3px;background:linear-gradient(90deg,#9C7748,#E8D3A6)}
 .hbar[style*="--mc"] i{background:var(--mc)}
@@ -1211,12 +1221,14 @@ button.nst:focus-visible{outline:2px solid var(--gold-500);outline-offset:2px}
 .lt-reg b.num{font-size:15px}
 .lt-reg b.serif{font-size:26px;line-height:1;color:var(--gold-300)}
 .lt-reg .dot{color:var(--text-3)}
-.lt-cnt{display:grid!important;grid-template-columns:repeat(4,1fr);gap:6px}
+.lt-cnt{display:grid!important;grid-template-columns:repeat(3,1fr);gap:6px}
 .lt-cnt>div{display:flex;flex-direction:column;align-items:flex-start;padding:8px 10px;border-radius:10px;background:rgba(227,168,151,.07)}
 .lt-cnt b{font-size:22px;line-height:1.1;color:var(--text-1)}
 .lt-cnt span{font-size:11.5px;color:var(--text-3)}
 .lt-zones{margin-top:10px;display:flex;flex-direction:column;gap:6px}
 .lt-zones .zp{display:grid;grid-template-columns:96px 1fr 52px;align-items:center;gap:10px;font-size:12.5px}
+.lt-zones .zp.z3{grid-template-columns:minmax(64px,96px) 1fr auto}
+.lt-zones .zp.zleg{font-size:11px}
 .lt-zones .num{text-align:right;color:var(--text-2)}
 .lt-plan{margin-top:10px;padding-top:9px;border-top:1px solid var(--lt-line);font-size:12.5px;color:var(--text-2);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .lt-kv{margin:0;display:flex;flex-direction:column;gap:8px}
@@ -1408,7 +1420,7 @@ button.nst:focus-visible{outline:2px solid var(--gold-500);outline-offset:2px}
   .lt-shipsteps li>.btn,.lt-shipsteps li>.sf{grid-column:2;width:100%}
   .lt-foot{flex-direction:column}
   .lt-foot .btn{justify-content:center}
-  .lt-cnt{grid-template-columns:repeat(2,1fr)}
+  .lt-cnt{grid-template-columns:repeat(3,1fr)}
   .lt-st{grid-template-columns:20px 56px 1fr}
   .lt-st .go{grid-column:3;justify-self:start}
   .lt-dl .r{grid-template-columns:22px 1fr auto;row-gap:4px}
