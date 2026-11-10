@@ -957,6 +957,8 @@ a.sd-dest:hover .u,a.sd-dest:focus-visible .u{color:var(--t1,#F6EFEA);text-decor
 /* ── 範圍按鈕（rangeButtons）：.seg 既有；補可換行 ── */
 .seg.rb{flex-wrap:wrap}
 .seg.rb a,.seg.rb span{white-space:nowrap}
+/* 諮詢時程範圍（今天｜明天｜本週｜下週｜本月｜自訂）：手機寬一列三顆、每列撐滿；自訂帶日期太長時自成一列 */
+@media (max-width:480px){.seg.rb.rb-sched{display:flex;width:100%}.seg.rb.rb-sched>a{flex:1 0 28%;display:inline-flex;justify-content:center;align-items:center;gap:4px}}
 
 /* ── 狀態卡（statusCards 圖示款：kc 帶 ic） ── */
 .kpis .card .kt{display:flex;align-items:center;gap:8px}
