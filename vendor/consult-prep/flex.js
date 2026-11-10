@@ -39,7 +39,7 @@
     assetBase: 'https://grace63188.github.io/consult-prep/assets/flex/',
     frontUrl: 'https://grace63188.github.io/consult-prep/?openExternalBrowser=1',
     adminUrl: 'https://grace63188.github.io/consult-prep/admin/?openExternalBrowser=1',
-    orderUrl: 'https://www.graceschool.com.tw/product/show/805?kind=65',
+    orderUrl: 'https://www.graceschool.com.tw/product/show/1023?kind=9',
     oaMessageBase: 'https://line.me/R/oaMessage/@52grace/?',
     ackText: '確認',
     materialKeyword: '領取諮詢教材',

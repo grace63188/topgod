@@ -85,7 +85,7 @@
       '▌三、繳交注意事項',
       '',
       '✦ 學員帳號與本名須與官網註冊資料一致。',
-      '✦ 作業送出後無法再修改，請確認內容完整後再提交。',
+      '✦ 作業送出後，教材交付前都可以回到作業頁補交更新。',
       '✦ 完成送出後，無需另外上傳官網或通知助教。',
       '',
       '📌 校長特別提醒',
@@ -2505,6 +2505,130 @@
     var past = cs.filter(function (k) { return ms(k.at) <= now; });
     return { rows: out, summary: { count: rec.length, lastDone: rec.length ? rec[rec.length - 1].submittedAt : '', lastCounsel: past.length ? past[past.length - 1].at : '' } };
   }
+  /* ---------------- 3.9.0 繳交輪次與版本（補交） ---------------- */
+  /**
+   * 規則：同一位學姐的回執依送出時間排序。教材交付前再次送出＝同一輪的新版本（補交）；
+   *   該輪第一次送出之後，若有教材流程「交付」或「放棄領取」→ 該輪關閉，之後送出＝下一輪。
+   *   放棄領取被恢復（abandonedAt 清空）→ 該輪重新開放（純推導，不另存狀態）。
+   *   送出模式（mode）＝'new' 者一律從新的一輪開始（交付後學姐自行開始新一輪）。
+   *   既有回執（無模式欄）照同一規則推導：一般情況＝第 1 輪第 1 次。
+   * receipts：[{ receiptId, submittedAt, mode?, ... }]；materials：教材流程 [{ flowId, state, deliveredAt, abandonedAt, material }]
+   * → { rounds:[{ no, open, firstAt, lastAt, closedAt, closeKind:'delivered'|'abandoned'|'next'|'', closeFlow, material, versions:[{ v, receiptId, submittedAt, mode, latest, r }] }], current }
+   */
+  var ROUND = { modes: ['first', 'resubmit', 'new'], closeLabels: { delivered: '教材已交付', abandoned: '已放棄領取', next: '已開始下一輪' } };
+  function roundClosures(materials) {
+    var out = [];
+    (materials || []).forEach(function (f) {
+      if (!f) return;
+      var d = f.state === 'delivered' ? timeToMs(f.deliveredAt) : null;
+      if (d != null) out.push({ ms: d, kind: 'delivered', flowId: f.flowId || '', material: f.material || '', at: String(f.deliveredAt || '').slice(0, 16) });
+      var a = f.abandonedAt ? timeToMs(f.abandonedAt) : null;
+      if (a != null && f.state !== 'delivered') out.push({ ms: a, kind: 'abandoned', flowId: f.flowId || '', material: f.material || '', at: String(f.abandonedAt || '').slice(0, 16) });
+    });
+    return out.sort(function (a, b) { return a.ms - b.ms; });
+  }
+  function submissionRounds(receipts, materials) {
+    var rec = (receipts || []).filter(function (x) { return x && x.receiptId && timeToMs(x.submittedAt) != null; })
+      .slice().sort(function (a, b) { return timeToMs(a.submittedAt) - timeToMs(b.submittedAt) || (a.receiptId < b.receiptId ? -1 : 1); });
+    var cl = roundClosures(materials), rounds = [], cur = null;
+    var closeAfter = function (lo, hi) { return cl.filter(function (c) { return c.ms > lo && (hi == null || c.ms <= hi); })[0] || null; };
+    rec.forEach(function (r) {
+      var ms = timeToMs(r.submittedAt), c = cur ? closeAfter(cur.firstMs, ms) : null;
+      if (!cur || c || r.mode === 'new') {
+        if (cur) { cur.open = false; if (c) { cur.closedAt = c.at; cur.closeKind = c.kind; cur.closeFlow = c.flowId; cur.material = c.material; } else { cur.closedAt = String(r.submittedAt).slice(0, 16); cur.closeKind = 'next'; } }
+        cur = { no: rounds.length + 1, open: true, firstMs: ms, firstAt: String(r.submittedAt), lastAt: String(r.submittedAt), closedAt: '', closeKind: '', closeFlow: '', material: '', versions: [] };
+        rounds.push(cur);
+      }
+      cur.versions.push({ v: cur.versions.length + 1, receiptId: r.receiptId, submittedAt: String(r.submittedAt), mode: r.mode || '', base: r.base || '', latest: false, r: r });
+      cur.lastAt = String(r.submittedAt);
+    });
+    if (cur) { var c2 = closeAfter(cur.firstMs, null); if (c2) { cur.open = false; cur.closedAt = c2.at; cur.closeKind = c2.kind; cur.closeFlow = c2.flowId; cur.material = c2.material; } }
+    rounds.forEach(function (x) { if (x.versions.length) x.versions[x.versions.length - 1].latest = true; delete x.firstMs; });
+    return { rounds: rounds, current: rounds.length ? rounds[rounds.length - 1] : null };
+  }
+  /** 某回執所在的輪次與版本 → { round, version, versions, open } 或 null */
+  function roundOfReceipt(rr, receiptId) {
+    var rs = (rr && rr.rounds) || [];
+    for (var i = 0; i < rs.length; i++) for (var j = 0; j < rs[i].versions.length; j++) if (rs[i].versions[j].receiptId === receiptId) return { round: rs[i].no, version: rs[i].versions[j].v, versions: rs[i].versions.length, open: rs[i].open, latest: rs[i].versions[j].latest };
+    return null;
+  }
+  /**
+   * 送出前判斷（submit_begin／submit_finish 共用）：mode＋前版回執 → { mode（正規化）, round, version } 或 { closed:true, round, closeKind, closedAt }
+   *   resubmit：前版所在輪次須為目前開放中的輪次，否則 closed（學姐前台顯示「本輪已交付」）
+   *   new：目前輪次仍開放（例如放棄領取已恢復）→ 改記為該輪的補交
+   *   first／未帶：沒有任何回執＝第 1 輪；目前輪次開放＝補交；已關閉＝新一輪
+   */
+  function roundPlan(rr, mode, baseReceiptId) {
+    var cur = rr && rr.current;
+    mode = ROUND.modes.indexOf(mode) >= 0 ? mode : 'first';
+    if (!cur) return { mode: 'first', round: 1, version: 1 };
+    if (mode === 'resubmit') {
+      var hit = baseReceiptId ? roundOfReceipt(rr, baseReceiptId) : null;
+      if (!cur.open || (hit && hit.round !== cur.no)) { var rd = hit ? rr.rounds[hit.round - 1] : cur; return { closed: true, round: rd.no, closeKind: rd.closeKind || 'delivered', closedAt: rd.closedAt || '', nextRound: rr.rounds.length + (cur.open ? 0 : 1) }; }
+      return { mode: 'resubmit', round: cur.no, version: cur.versions.length + 1 };
+    }
+    if (cur.open) return { mode: 'resubmit', round: cur.no, version: cur.versions.length + 1 };
+    return { mode: 'new', round: cur.no + 1, version: 1 };
+  }
+  /** 前台摘要（roster_lookup／submission_get 共用；不含作答內容） */
+  function roundBrief(rr) {
+    var cur = rr && rr.current; if (!cur) return null;
+    var last = cur.versions[cur.versions.length - 1], prev = rr.rounds.length > 1 ? rr.rounds[rr.rounds.length - 2] : null;
+    var b = function (x) { return { no: x.no, open: x.open, versions: x.versions.length, firstAt: x.firstAt.slice(0, 16), lastAt: x.lastAt.slice(0, 16), closedAt: x.closedAt, closeKind: x.closeKind, closeLabel: ROUND.closeLabels[x.closeKind] || '', material: x.material || '' }; };
+    return { rounds: rr.rounds.length, current: b(cur), prev: prev ? b(prev) : null, latestReceipt: last.receiptId, latestAt: last.submittedAt.slice(0, 16), canResubmit: cur.open, canNewRound: !cur.open };
+  }
+  /** 下次諮詢（counsel_sync 的 nc：{ at（ISO）, items[], status }）→ { at:'yyyy.mm.dd HH:mm', item, ms } ；已過或無 → null */
+  function counselNext(nc, nowMs) {
+    if (!nc || !nc.at) return null;
+    var ms = timeToMs(nc.at); if (ms == null) { var t = Date.parse(nc.at); ms = isNaN(t) ? null : t; }
+    if (ms == null || ms <= (Number(nowMs) || Date.now())) return null;
+    var items = Array.isArray(nc.items) ? nc.items.filter(Boolean) : [];
+    return { at: stampOf(ms).slice(0, 16), item: items.join('＋') || String(nc.title || '') || '一對一諮詢', ms: ms };
+  }
+  /** 版本檔案快照（作業資料 JSON 的「放入資料」區塊＝送出當下雲端分類資料夾的檔案清單）→ [{ id, label, count, files:[{ id, name, url, updated }] }] */
+  function versionSnapshot(d) {
+    var sec = d && Array.isArray(d.sections) ? d.sections.filter(function (x) { return x && x.id === 'place'; })[0] : null;
+    if (!sec || !Array.isArray(sec.items)) return [];
+    return sec.items.map(function (it) {
+      var files = (it.files || []).map(function (f) { var m = /\/d\/([\w-]{10,})/.exec(String(f.url || '')); return { id: m ? m[1] : '', name: String(f.name || ''), url: String(f.url || ''), updated: String(f.updated || '') }; });
+      return { id: String(it.id || ''), label: String(it.label || ''), count: it.count == null ? files.length : Number(it.count) || 0, files: files };
+    });
+  }
+  /** 作答欄位（作業資料 JSON 各區塊 fields 的 display）→ [{ key, section, label, value }] */
+  function versionFields(d) {
+    var out = [];
+    ((d && d.sections) || []).forEach(function (s) {
+      if (!s || s.id === 'identity' || s.id === 'place') return;
+      (s.fields || []).forEach(function (f) { if (f && f.label) out.push({ key: s.id + '.' + (f.id || f.label), section: s.label || '', label: f.label, value: String(f.display == null ? '' : f.display) }); });
+    });
+    return out;
+  }
+  /** 兩個版本的差異（前版可為 null）→ { fields:[{ key, section, label, before, after }], files:[{ id, label, count, prev, added:[名稱], removed:[名稱] }], changed, added, removed } */
+  function versionDiff(prev, cur) {
+    var pf = {}, out = { fields: [], files: [], changed: 0, added: 0, removed: 0 };
+    versionFields(prev).forEach(function (f) { pf[f.key] = f.value; });
+    versionFields(cur).forEach(function (f) { if (prev && pf[f.key] !== f.value) { out.fields.push({ key: f.key, section: f.section, label: f.label, before: pf[f.key] == null ? '' : pf[f.key], after: f.value }); out.changed++; } });
+    var ps = {}; versionSnapshot(prev).forEach(function (x) { ps[x.id] = x; });
+    versionSnapshot(cur).forEach(function (x) {
+      var p = ps[x.id], pn = p ? p.files.map(function (f) { return f.name; }) : [], cn = x.files.map(function (f) { return f.name; });
+      var add = prev ? cn.filter(function (n) { return pn.indexOf(n) < 0; }) : [], rem = prev ? pn.filter(function (n) { return cn.indexOf(n) < 0; }) : [];
+      out.added += add.length; out.removed += rem.length;
+      out.files.push({ id: x.id, label: x.label, count: x.count, prev: p ? p.count : null, added: add, removed: rem, files: x.files });
+    });
+    return out;
+  }
+  /** 差異摘要文字：「修改 2 題・檔案新增 3 份、移除 1 份」（無前版或無差異 → '' 或「與前版相同」） */
+  function versionDiffText(df, hasPrev) {
+    if (!hasPrev) return '';
+    var a = [];
+    if (df.changed) a.push('修改 ' + df.changed + ' 題');
+    var f = []; if (df.added) f.push('新增 ' + df.added + ' 份'); if (df.removed) f.push('移除 ' + df.removed + ' 份');
+    if (f.length) a.push('檔案' + f.join('、'));
+    return a.length ? a.join('・') : '與前版相同';
+  }
+  /** 補交徽章文字：「補交 第 N 次」（N＝本輪送出次數，2 以上才有） */
+  function resubmitBadge(round) { return round && round.versions && round.versions.length >= 2 ? '補交 第 ' + round.versions.length + ' 次' : ''; }
+
   /** 3.2.4：本輪作業通知是否已發出（作業通知、補件、批次；成功者）→ 進行中／可提醒截止 */
   function watchNotified(nt) { return (Array.isArray(nt) ? nt : []).some(function (n) { return n && n.ok === true && ['notify', 'resend', 'batch', 'supplement'].indexOf(n.kind) >= 0; }); }
   /** 3.2.4：是否已發送過作業通知（追蹤名單通知紀錄 nt 有一筆成功的作業類通知；教材下單通知不算） */
@@ -2624,7 +2748,8 @@
     labels: { unnotified: '未通知下單', notified: '已通知待下單', ordered: '已下單待交付', delivered: '已交付' },
     productId: 805,
     productName: '《AI指令設計》',
-    orderUrl: 'https://www.graceschool.com.tw/product/show/805?kind=65',
+    orderUrl: 'https://www.graceschool.com.tw/product/show/1023?kind=9',   /* 3.9.1 下單商品《諮詢教材》#1023（舊 #805《AI指令設計》仍可比對） */
+    orderUrlOld: 'https://www.graceschool.com.tw/product/show/805?kind=65',
     reasonMatch: '購買課程 - 《AI指令設計》',
     pointsSearch: 'AI指令設計',
     keyword: '領取諮詢教材',
@@ -2657,15 +2782,16 @@
    * 3.2.4 教材下單商品（Script Property MAT_PRODUCTS）：商品 ID 清單＋商品名稱關鍵字；舊 #805《AI指令設計》保留（idNames 為 ID 的名稱對照，點數紀錄沒有商品 ID 時以名稱比對）
    *   { ids:[805], keywords:['諮詢教材'], idNames:{ '805':'AI指令設計' }, displayName:'諮詢教材', orderUrl, seen:[{ id, name, at, n }] }
    */
-  var MAT_PRODUCTS = { maxIds: 20, maxKeywords: 20, maxSeen: 20, maxName: 40, defaults: { ids: [805], keywords: ['諮詢教材'], idNames: { '805': 'AI指令設計' }, displayName: '諮詢教材' } };
+  var MAT_PRODUCTS = { maxIds: 20, maxKeywords: 20, maxSeen: 20, maxName: 40, defaults: { ids: [1023, 805], keywords: ['諮詢教材'], idNames: { '1023': '諮詢教材', '805': 'AI指令設計' }, displayName: '諮詢教材' }, /* 3.9.1 預設下單商品 */ primaryId: 1023 };
   function normalizeMatProducts(o) {
     o = o && typeof o === 'object' ? o : {};
     var D = MAT_PRODUCTS.defaults, ids = [], kws = [], names = {};
     (Array.isArray(o.ids) ? o.ids : D.ids).forEach(function (x) { var n = Math.floor(Number(String(x).replace(/^#/, ''))); if (n > 0 && n < 1e9 && ids.indexOf(n) < 0 && ids.length < MAT_PRODUCTS.maxIds) ids.push(n); });
     (Array.isArray(o.keywords) ? o.keywords : D.keywords).forEach(function (x) { var t = cleanStr(x).slice(0, MAT_PRODUCTS.maxName); if (t && kws.indexOf(t) < 0 && kws.length < MAT_PRODUCTS.maxKeywords) kws.push(t); });
     var src = o.idNames && typeof o.idNames === 'object' ? o.idNames : D.idNames;
-    ids.forEach(function (id) { var t = cleanStr(src[String(id)] || (String(id) === '805' && !o.idNames ? D.idNames['805'] : '')).slice(0, MAT_PRODUCTS.maxName); if (t) names[String(id)] = t; });
-    var url = cleanStr(o.orderUrl);
+    if (ids.length === 1 && ids[0] === 805 && Array.isArray(o.ids)) ids.unshift(MAT_PRODUCTS.primaryId);   /* 3.9.1 舊預設（只有 #805）→ 補上 #1023《諮詢教材》 */
+    ids.forEach(function (id) { var t = cleanStr(src[String(id)] || (D.idNames[String(id)] && (!o.idNames || String(id) === String(MAT_PRODUCTS.primaryId)) ? D.idNames[String(id)] : '')).slice(0, MAT_PRODUCTS.maxName); if (t) names[String(id)] = t; });
+    var url = cleanStr(o.orderUrl); if (url === MATERIAL.orderUrlOld) url = '';   /* 3.9.1 舊預設 #805 網址 → 新預設 #1023 */
     return { ids: ids, keywords: kws, idNames: names, displayName: cleanStr(o.displayName).slice(0, MAT_PRODUCTS.maxName) || kws[0] || D.displayName,
       orderUrl: /^https:\/\/(www\.)?graceschool\.com\.tw\//.test(url) ? url.slice(0, 200) : MATERIAL.orderUrl,
       seen: (Array.isArray(o.seen) ? o.seen : []).filter(function (x) { return x && typeof x === 'object' && (x.id || x.name); }).slice(0, MAT_PRODUCTS.maxSeen).map(function (x) { return { id: x.id ? String(x.id).slice(0, 20) : '', name: cleanStr(x.name).slice(0, 80), at: cleanStr(x.at).slice(0, 20), n: Math.max(0, Math.floor(Number(x.n) || 0)) }; }) };
@@ -3108,7 +3234,7 @@
 
   /* ---------------- 3.3.7 書籤版本 ---------------- */
   /** 三支書籤共用版本號（src/roster-bookmarklet.js、src/line-map-bookmarklet.js 的 BM_VERSION 需一致；build.py 檢查） */
-  var BOOKMARKLET = { version: '3.8.0', kinds: { roster: '學院後台同步', orders: '同步學院下單', linemap: 'LINE 對應' } };
+  var BOOKMARKLET = { version: '3.8.6', kinds: { roster: '學院後台同步', orders: '同步學院下單', linemap: 'LINE 對應' } };
   /** 'x.y.z' 比較：a < b → -1、相等 0、a > b → 1；無法解析視為 0.0.0 */
   function semverCmp(a, b) {
     var p = function (v) { var m = /^v?(\d{1,4})\.(\d{1,4})\.(\d{1,4})$/.exec(String(v == null ? '' : v).trim()); return m ? [+m[1], +m[2], +m[3]] : [0, 0, 0]; };
@@ -3247,6 +3373,7 @@
     ACK_REASON_LABEL: ACK_REASON_LABEL,
     REMIND_LATE: REMIND_LATE, remindLateText: remindLateText, normTimeInput: normTimeInput,
     studentHistory: studentHistory,
+    ROUND: ROUND, roundClosures: roundClosures, submissionRounds: submissionRounds, roundOfReceipt: roundOfReceipt, roundPlan: roundPlan, roundBrief: roundBrief, resubmitBadge: resubmitBadge, counselNext: counselNext, versionSnapshot: versionSnapshot, versionFields: versionFields, versionDiff: versionDiff, versionDiffText: versionDiffText,
     reportPrincipalText: reportPrincipalText,
     COUNSEL: COUNSEL,
     counselGroup: counselGroup,
