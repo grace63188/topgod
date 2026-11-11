@@ -1144,6 +1144,11 @@ body.m .dlg .sd-form .miss{grid-template-columns:1fr}
 .nst small{font-size:10.5px;color:var(--gold-300)}
 .nst.none{color:var(--c-due);border-color:rgba(255,138,112,.35);background:rgba(255,138,112,.06)}
 .nst.ok{color:var(--c-work);border-color:rgba(61,183,164,.4);background:rgba(61,183,164,.07);cursor:pointer}
+.nst.q{color:var(--text-2);border-color:var(--hair);background:transparent}
+.nst.q.w{color:#FFB09E;border-color:rgba(255,138,112,.35)}
+.nst.q.v{color:#C9B6FA;border-color:rgba(169,139,245,.35)}
+.nst.q small{color:var(--text-3,var(--text-2))}
+.nlog .nlst{margin-right:6px;font-size:11px}
 .nst.mk{color:var(--gold-500);border-color:var(--gold-line);background:var(--gold-tint);cursor:pointer}
 button.nst:hover{filter:brightness(1.12)}
 button.nst:focus-visible{outline:2px solid var(--gold-500);outline-offset:2px}
