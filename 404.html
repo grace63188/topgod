@@ -10,21 +10,49 @@
 <link rel="icon" href="assets/logo.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@600;700;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="app.css?v=2026-11-11 17:03">
+<link rel="stylesheet" href="app-C360926C.css">
+<!-- 字型不擋第一次繪製：先以系統字型畫出，字型到了再換（display=swap） -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@600;700;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap" media="print" onload="this.media='all'">
+<link rel="modulepreload" href="js/app-VCDUQET4.js">
+<link rel="modulepreload" href="js/c-WBET44RS.js">
+<link rel="modulepreload" href="js/c-LIAKIMMK.js">
+<link rel="modulepreload" href="js/c-VC7P5AMR.js">
+<link rel="modulepreload" href="js/c-V6577M23.js">
+<link rel="modulepreload" href="js/c-KES27VBP.js">
+<link rel="modulepreload" href="js/c-6ZDK5XPD.js">
+<link rel="modulepreload" href="js/c-IBBGFP5D.js">
+<link rel="modulepreload" href="js/c-EUFGHZRB.js">
+<link rel="modulepreload" href="js/c-6O4G3XTV.js">
 <script>
 /* 執行設定：資料中心網址（與諮詢教材·專屬訂製同一個部署）、Google 登入 client id；?mock=1 才用示範資料 */
 window.GRACE_CONFIG = {
   GAS_URL: 'https://script.google.com/macros/s/AKfycbyi0Ft0XQtzcJUNyGWd4SF-isIKl5gW8ANhwBm7iWQossIuOGyXiC_inruOXF_M4MaV/exec',
   GOOGLE_CLIENT_ID: '423060878330-9jb6rn4i2lr4lalgvuv39nu6acb8ukcp.apps.googleusercontent.com',
   CONSULT_BASE: 'https://grace63188.github.io/consult-prep/',
-  BUILD: '2026-11-11 17:03'
+  BUILD: '2026-11-11 21:11'
 };
 </script>
-<script src="schema.js?v=2026-11-11 17:03"></script>
+
 </head>
 <body>
 <div id="app" aria-live="polite"><div class="boot"><img src="assets/ui/a/logo.png" alt="G.R.A.C.E Academy" width="160"><p>學院學習管理載入中…</p></div></div>
-<script src="app.js?v=2026-11-11 17:03"></script>
+<script>
+/* 開啟快照（v73）：已登入、同一帳號、同一版、同一網址 → 主程式載入前先貼上上次的畫面（src/admin/viewsnap.js bootSave 寫入；格式兩邊一致）。
+   主程式啟動後沿用這個畫面並換上最新內容；登入失效會改顯示登入頁 */
+(function () { try {
+  if (/[?&]mock=1/.test(location.search)) return;
+  var raw = localStorage.getItem('consult_admin_token') || sessionStorage.getItem('consult_admin_token'); if (!raw || raw.charAt(0) !== '{') return;
+  var ss = JSON.parse(raw); if (!ss || !ss.token || !ss.email || (ss.expiresAt && Date.now() > Number(ss.expiresAt))) return;
+  var h = location.hash, mq = window.matchMedia('(max-width:900px)').matches ? 'm' : 'd', B = window.GRACE_CONFIG.BUILD, s = null;
+  if (!h || h === '#' || h === '#/') return;
+  var ks = ['grace_boot_snap:last', 'grace_boot_snap:home'];
+  for (var i = 0; i < ks.length && !s; i++) { var t = localStorage.getItem(ks[i]); if (t && t.indexOf('"h":' + JSON.stringify(h)) > 0) { t = JSON.parse(t); if (t && t.b === B && t.o === ss.email && t.m === mq && t.h === h && typeof t.html === 'string') s = t; } }
+  if (!s) return;
+  var app = document.getElementById('app'); app.innerHTML = s.html; app.dataset.shell = mq; if (mq === 'm') document.body.classList.add('m');
+  window.GRACE_BOOT_SNAP = { hash: h, at: s.at }; try { performance.mark('grace:snap'); } catch (e) {}
+} catch (e) { /* 沒有開啟快照：照常啟動 */ } })();
+</script>
+<script>window.GRACE_CHUNKS={"members":["js/c-H7NZVEYW.js","js/c-2P3BIKEF.js","js/c-EUYOPBKG.js","js/c-HZAPC65F.js","js/c-IZGMAID2.js","js/c-AAPAEBNH.js","js/c-63QZMZYV.js","js/c-JXXK3WCU.js","js/c-X3KTVN43.js","js/c-SL5CW72D.js","js/c-GJJOPPHF.js"],"letters":["js/c-GAV5OUA6.js","js/c-M3HMOZON.js","js/c-B245ZWZB.js","js/c-IZGMAID2.js","js/c-QX24LME5.js","js/c-GJJOPPHF.js"],"reward":["js/c-FVYXDTSC.js","js/c-54FOXQPD.js","js/c-4YAYOUPK.js","js/c-JXXK3WCU.js","js/c-ESDMZTBE.js","js/c-IZGMAID2.js","js/c-TBM7GWVJ.js","js/c-RX6YSC6R.js","js/c-IIHLOUSG.js","js/c-GJJOPPHF.js"],"ship":["js/c-QQDT5RVK.js","js/c-M3HMOZON.js","js/c-B245ZWZB.js","js/c-IZGMAID2.js","js/c-ESDMZTBE.js"],"notify":["js/c-V7RUWCD5.js","js/c-XMR2MYO6.js","js/c-AQYI7ZKQ.js","js/c-T6SKKJDJ.js","js/c-DOW6EM2O.js","js/c-ESDMZTBE.js","js/c-IZGMAID2.js","js/c-EUYOPBKG.js","js/c-HZAPC65F.js","js/c-AAPAEBNH.js","js/c-63QZMZYV.js","js/c-JXXK3WCU.js","js/c-TBM7GWVJ.js","js/c-FNLWKS4G.js","js/c-RX6YSC6R.js","js/c-SL5CW72D.js","js/c-6EX5SOLG.js","js/c-GJJOPPHF.js"],"templates":["js/c-KSXMNMJ3.js","js/c-XMR2MYO6.js","js/c-AQYI7ZKQ.js","js/c-T6SKKJDJ.js","js/c-DOW6EM2O.js","js/c-ESDMZTBE.js","js/c-IZGMAID2.js","js/c-EUYOPBKG.js","js/c-HZAPC65F.js","js/c-AAPAEBNH.js","js/c-63QZMZYV.js","js/c-JXXK3WCU.js","js/c-TBM7GWVJ.js","js/c-FNLWKS4G.js","js/c-RX6YSC6R.js","js/c-SL5CW72D.js","js/c-6EX5SOLG.js","js/c-GJJOPPHF.js"],"settings":["js/c-6KAAKYZK.js","js/c-XMR2MYO6.js","js/c-AQYI7ZKQ.js","js/c-T6SKKJDJ.js","js/c-DOW6EM2O.js","js/c-ESDMZTBE.js","js/c-IZGMAID2.js","js/c-EUYOPBKG.js","js/c-HZAPC65F.js","js/c-AAPAEBNH.js","js/c-63QZMZYV.js","js/c-JXXK3WCU.js","js/c-TBM7GWVJ.js","js/c-FNLWKS4G.js","js/c-RX6YSC6R.js","js/c-SL5CW72D.js","js/c-6EX5SOLG.js","js/c-GJJOPPHF.js"],"login":["js/c-XAIDLCUD.js"],"home":["js/c-D6E7LE27.js","js/c-AQYI7ZKQ.js","js/c-3SRRT3CZ.js","js/c-B245ZWZB.js","js/c-3GZOHP2K.js","js/c-54FOXQPD.js","js/c-4YAYOUPK.js","js/c-JXXK3WCU.js","js/c-EUYOPBKG.js","js/c-HZAPC65F.js","js/c-IZGMAID2.js","js/c-AAPAEBNH.js","js/c-63QZMZYV.js","js/c-FNLWKS4G.js","js/c-RX6YSC6R.js","js/c-SL5CW72D.js","js/c-IIHLOUSG.js","js/c-ZKQVWYPZ.js","js/c-6EX5SOLG.js","js/c-GJJOPPHF.js"],"workbench":["js/c-D3HH4MLJ.js","js/c-GJJOPPHF.js","js/c-IZGMAID2.js"],"plan":["js/c-FWRHBE2X.js","js/c-3SRRT3CZ.js","js/c-B245ZWZB.js","js/c-3GZOHP2K.js","js/c-54FOXQPD.js","js/c-4YAYOUPK.js","js/c-JXXK3WCU.js","js/c-EUYOPBKG.js","js/c-HZAPC65F.js","js/c-IZGMAID2.js","js/c-AAPAEBNH.js","js/c-63QZMZYV.js","js/c-IIHLOUSG.js","js/c-GJJOPPHF.js"],"review":["js/c-AIHFMP2J.js","js/c-E4B2QWQL.js","js/c-GJJOPPHF.js","js/c-IZGMAID2.js","js/c-4YAYOUPK.js","js/c-EUYOPBKG.js","js/c-HZAPC65F.js","js/c-AAPAEBNH.js","js/c-63QZMZYV.js","js/c-JXXK3WCU.js"],"consult":["js/c-R7J5632Q.js","js/c-KP4462GS.js","js/c-E4B2QWQL.js","js/c-GJJOPPHF.js","js/c-IZGMAID2.js","js/c-2MLTCR6M.js","js/c-DOW6EM2O.js","js/c-ESDMZTBE.js","js/c-FNLWKS4G.js","js/c-RX6YSC6R.js","js/c-SL5CW72D.js","js/c-HZAPC65F.js","js/c-63QZMZYV.js","js/c-JXXK3WCU.js"],"custom":["js/c-7VVC6NYD.js","js/c-2MLTCR6M.js","js/c-DOW6EM2O.js","js/c-ESDMZTBE.js","js/c-IZGMAID2.js","js/c-FNLWKS4G.js","js/c-RX6YSC6R.js","js/c-SL5CW72D.js","js/c-GJJOPPHF.js"],"deadline":["js/c-LPKUO4D3.js","js/c-4YAYOUPK.js","js/c-ZKQVWYPZ.js","js/c-6EX5SOLG.js","js/c-AAPAEBNH.js","js/c-63QZMZYV.js","js/c-JXXK3WCU.js","js/c-IZGMAID2.js","js/c-EUYOPBKG.js","js/c-HZAPC65F.js","js/c-GJJOPPHF.js"],"student":["js/c-YX64NTCQ.js","js/c-2P3BIKEF.js","js/c-EUYOPBKG.js","js/c-HZAPC65F.js","js/c-IZGMAID2.js","js/c-AAPAEBNH.js","js/c-63QZMZYV.js","js/c-JXXK3WCU.js","js/c-QX24LME5.js","js/c-T6SKKJDJ.js","js/c-DOW6EM2O.js","js/c-ESDMZTBE.js","js/c-3GZOHP2K.js","js/c-54FOXQPD.js","js/c-4YAYOUPK.js","js/c-KP4462GS.js","js/c-E4B2QWQL.js","js/c-GJJOPPHF.js","js/c-2MLTCR6M.js","js/c-FNLWKS4G.js","js/c-RX6YSC6R.js","js/c-SL5CW72D.js","js/c-526CXIWV.js","js/c-X3KTVN43.js","js/c-IIHLOUSG.js","js/c-ZKQVWYPZ.js","js/c-6EX5SOLG.js"]};(function(){try{var m=(location.hash.match(/^#\/([a-z]+)/)||[])[1]||'home',l=(window.GRACE_CHUNKS[m]||[]).concat(/^\d+$/.test((location.hash.split('/')[2]||''))?window.GRACE_CHUNKS.consult||[]:[]);for(var i=0;i<l.length;i++){var k=document.createElement('link');k.rel='modulepreload';k.href=l[i];document.head.appendChild(k);}}catch(e){}})();</script>
+<script type="module" src="js/app-VCDUQET4.js"></script>
 </body>
 </html>
