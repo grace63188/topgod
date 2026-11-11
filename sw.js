@@ -4,12 +4,13 @@
  *  不經手：資料中心（script.google.com）、Google 登入、字型與其他網域一律不攔截——資料照舊由頁面的 SWR 快取處理，這裡不會把舊回應當新的；
  *          version.json、sw.js、go.html、assets/cards（LINE 圖卡素材）、vendor/、帶 nosw 參數、Range 請求、非 GET 一律直接走網路
  *  新版：install 預載新版殼；不自動接手，等頁面確認沒有編輯中（buildwatch）送 {type:'skip'} 才 skipWaiting；導覽網址 ?v= 不是本版 → 走網路
- *  沒有安裝提示、沒有 manifest、沒有推播
+ *  v67 主畫面 App：同一個 Service Worker 也處理推播——push 不帶內容 → 以取回金鑰（IndexedDB grace-sw/kv push）呼叫資料中心 lms_push_pull 取回通知顯示；點通知 → 開啟對應頁（#/…）
+ *          資料中心的回應只拿來顯示通知，一律不放進快取；manifest.webmanifest、啟動畫面直接走網路
  */
-const BUILD = '2026-11-11 21:42';
+const BUILD = '2026-11-12 01:57';
 const SHELL = 'grace-shell-' + BUILD;
-const PRECACHE = ["index.html","app-C360926C.css","js/c-QC2B2PCF.js","js/c-O3ULNC4N.js","js/c-SW462NSK.js","js/c-6KYM6TBV.js","js/c-XCLO7X5Y.js","js/c-URAABQIF.js","js/c-A637NC57.js","js/c-5D5EYHKX.js","js/c-FHZWNCQB.js","js/c-XAIDLCUD.js","js/c-2UXSASPL.js","js/c-AQYI7ZKQ.js","js/c-4BCKBZCA.js","js/c-O4EXKAPU.js","js/c-P2GE7NT2.js","js/c-R6XMFPUC.js","js/c-UEM4NDQC.js","js/c-6GOGO7P2.js","js/c-Z72SGQ5M.js","js/c-BJ55KBGI.js","js/c-MA7XELUQ.js","js/c-ZPVTGGU3.js","js/c-4J5C25IY.js","js/c-PGY4YKF5.js","js/c-R42YS2MZ.js","js/c-6WRAD25A.js","js/c-76VKJZQJ.js","js/c-37R4IOPP.js","js/c-JWJXC57O.js","js/c-QUMEJHCE.js","js/c-465J3BFN.js","js/c-4YAYOUPK.js","js/app-G4VKO676.js","js/c-5WRG2OMF.js","js/c-FVBPJXR2.js","js/c-TBM7GWVJ.js","js/c-FR4DJEY3.js","js/c-EZHE7XYL.js","js/c-UJ5XG3HG.js","js/c-FNLWKS4G.js","js/c-RX6YSC6R.js","js/c-NGAV5RMC.js","js/c-7GLYVICV.js","js/c-H2GO6LDY.js","js/c-IIHLOUSG.js","js/c-NON2J2C7.js","js/c-6EX5SOLG.js","js/c-FX2O4IB5.js","js/c-K7JI4ZJR.js","js/c-KYAVALQM.js","js/c-KTYYS34K.js","js/c-JXXK3WCU.js","js/c-SL5CW72D.js","js/c-J57MANPW.js","js/c-LMMZC7TI.js","js/c-L3SRK7NQ.js","js/c-FHNABLHK.js","js/c-ICR5TPHB.js","js/c-VC7P5AMR.js","js/c-KES27VBP.js","js/c-V6577M23.js","js/c-IBBGFP5D.js","js/c-6O4G3XTV.js","js/c-EUFGHZRB.js","js/c-6ZDK5XPD.js","assets/ui/a/logo.png","assets/logo.png"];
-const PASS = /^(version\.json|sw\.js|go\.html|robots\.txt)$|^assets\/cards\/|^vendor\//;
+const PRECACHE = ["index.html","app-791ABEEC.css","js/c-WPL5XZBY.js","js/c-JFHJRIZV.js","js/c-Y6QV37QF.js","js/c-LIHS5RBX.js","js/c-BNSEQERT.js","js/c-LDJAXA2S.js","js/c-CHXJGZFH.js","js/c-UGH5V5CW.js","js/c-2OYXIWNZ.js","js/c-T72VFSVW.js","js/c-WGLV4AJN.js","js/c-NGDGL474.js","js/c-GU33IU5M.js","js/c-YHKCXJEH.js","js/c-24EGR466.js","js/c-7FLDHDCM.js","js/c-4JNK6H4U.js","js/c-GKW6ZBES.js","js/c-KOUJ2AEB.js","js/c-RZYLHW4K.js","js/c-GDTKAC3M.js","js/c-U3F7UL5Y.js","js/c-WGES3WCR.js","js/c-UQSYYOCQ.js","js/c-BGLAIJXY.js","js/c-5H7TJSBT.js","js/c-SDDMM46I.js","js/c-7QPCJ5GU.js","js/c-M7B6VF55.js","js/c-YH4BDR5B.js","js/c-FH6K6ADK.js","js/c-TB5J5VQW.js","js/c-L6ALISFU.js","js/app-PTQCP77N.js","js/c-YF3JB6A5.js","js/c-FVBPJXR2.js","js/c-TBM7GWVJ.js","js/c-LZJLUCLU.js","js/c-2SOR5DM6.js","js/c-J4TTJQKQ.js","js/c-2ZQORSPQ.js","js/c-EPHHOPM3.js","js/c-OYAM7O5E.js","js/c-PHLMKXJK.js","js/c-K2LO5R3Y.js","js/c-2LYVJFDH.js","js/c-IIHLOUSG.js","js/c-QAY2UZHR.js","js/c-6EX5SOLG.js","js/c-RMRSBM7K.js","js/c-LMQHIZMG.js","js/c-N42MWTBS.js","js/c-GVJQRIBR.js","js/c-JXXK3WCU.js","js/c-SL5CW72D.js","js/c-4PKRTJQU.js","js/c-R47OTGJF.js","js/c-4UNZSDDS.js","js/c-M6HUE74W.js","js/c-RLZJW5D6.js","js/c-SRDEBZ2K.js","js/c-WDAMQX27.js","js/c-TVBTFTQ2.js","js/c-ZOQ6OHE3.js","js/c-6O4G3XTV.js","js/c-SOZDSHOT.js","js/c-6ZDK5XPD.js","assets/ui/a/logo.png","assets/logo.png","assets/pwa/icon-192.png","assets/pwa/badge-96.png"];
+const PASS = /^(version\.json|sw\.js|go\.html|robots\.txt|manifest\.webmanifest)$|^assets\/cards\/|^vendor\/|^assets\/pwa\/splash-/;
 const SCOPE = new URL(self.registration.scope);
 
 self.addEventListener('install', (e) => {
@@ -55,7 +56,7 @@ self.addEventListener('fetch', (e) => {
   const rel = u.pathname.slice(SCOPE.pathname.length);
   if (PASS.test(rel) || u.searchParams.has('nosw')) return;
   if (r.mode === 'navigate') { if (rel === '' || rel === 'index.html') e.respondWith(nav(r, u)); return; }
-  if (/^js\/[\w-]+\.js$/.test(rel) || /^app-[0-9A-Z]{8}\.css$/.test(rel) || /^assets\/(ui|lms)\//.test(rel) || rel === 'assets/logo.png') e.respondWith(shell(r, rel));
+  if (/^js\/[\w-]+\.js$/.test(rel) || /^app-[0-9A-Z]{8}\.css$/.test(rel) || /^assets\/(ui|lms)\//.test(rel) || rel === 'assets/logo.png' || /^assets\/pwa\/(icon-192|badge-96)\.png$/.test(rel)) e.respondWith(shell(r, rel));
 });
 /** 導覽：本版殼（不等網路）；網址指定其他版本（新版接手）→ 走網路 */
 async function nav(req, u) {
@@ -73,3 +74,51 @@ async function shell(req, rel) {
   if (r.ok && r.type === 'basic') c.put(rel, r.clone()).catch(() => {});
   return r;
 }
+
+/* ── 推播 ── */
+function idb() {
+  return new Promise((ok, no) => { const q = indexedDB.open('grace-sw', 1); q.onupgradeneeded = () => q.result.createObjectStore('kv'); q.onsuccess = () => ok(q.result); q.onerror = () => no(q.error); });
+}
+async function kv(key, val) {
+  const db = await idb();
+  return new Promise((ok, no) => { const t = db.transaction('kv', val === undefined ? 'readonly' : 'readwrite'), s = t.objectStore('kv'), q = val === undefined ? s.get(key) : s.put(val, key); q.onsuccess = () => ok(q.result); q.onerror = () => no(q.error); });
+}
+async function pull(cfg, extra) {
+  const r = await fetch(cfg.gas, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(Object.assign({ action: 'lms_push_pull', sid: cfg.sid, key: cfg.key }, extra || {})) });
+  const j = await r.json();
+  if (!j || !j.ok) throw new Error((j && j.error) || '取回失敗');
+  return (j.data && j.data.items) || [];
+}
+const ICON = 'assets/pwa/icon-192.png', BADGE = 'assets/pwa/badge-96.png';
+self.addEventListener('push', (e) => {
+  e.waitUntil((async () => {
+    let items = [];
+    try { const cfg = await kv('push'); if (cfg && cfg.sid) items = await pull(cfg); } catch (er) { items = []; }
+    /* iOS：每次推播都必須顯示通知；取不到內容時顯示一則通用通知（同一個 tag 會覆蓋） */
+    if (!items.length) items = [{ id: 'generic', title: 'G.R.A.C.E 學院管理', body: '有新的通知，點開查看', url: '#/home/today', at: new Date().toISOString(), tag: 'grace-generic' }];
+    for (const it of items) {
+      await self.registration.showNotification(it.title || 'G.R.A.C.E 學院管理', { body: it.body || '', tag: it.tag || ('g:' + it.id).slice(0, 64), icon: ICON, badge: BADGE, timestamp: Date.parse(it.at) || Date.now(), data: { url: it.url || '#/home/today', at: it.at || '' } });
+    }
+    try { if (self.navigator.setAppBadge) { const n = (await self.registration.getNotifications()).length; if (n) await self.navigator.setAppBadge(n); } } catch (er) { /* ignore */ }
+  })());
+});
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const d = e.notification.data || {}, hash = /^#\//.test(d.url || '') ? d.url : '#/home/today', at = d.at || new Date().toISOString();
+  e.waitUntil((async () => {
+    try { if (self.navigator.clearAppBadge && !(await self.registration.getNotifications()).length) await self.navigator.clearAppBadge(); } catch (er) { /* ignore */ }
+    const list = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const c = list.find((x) => x.url.indexOf(SCOPE.href) === 0);
+    if (c) { try { await c.focus(); } catch (er) { /* ignore */ } c.postMessage({ type: 'push-open', hash, at }); return; }
+    await self.clients.openWindow(SCOPE.href + '?pn=' + encodeURIComponent(at) + hash);
+  })());
+});
+/* 推播服務換了訂閱（到期或重設）：以同一組 VAPID 公鑰重新訂閱，並用取回金鑰把新網址交給資料中心 */
+self.addEventListener('pushsubscriptionchange', (e) => {
+  e.waitUntil((async () => {
+    const cfg = await kv('push'); if (!cfg || !cfg.pub) return;
+    const key = Uint8Array.from(atob(cfg.pub.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - cfg.pub.length % 4) % 4)), (c) => c.charCodeAt(0));
+    const sub = await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+    await pull(cfg, { renew: { endpoint: sub.endpoint }, peek: true });
+  })());
+});

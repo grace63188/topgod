@@ -8,20 +8,39 @@
 <meta name="color-scheme" content="dark">
 <title>學院學習管理｜G.R.A.C.E Academy</title>
 <link rel="icon" href="assets/logo.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0C0A0B">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="G.R.A.C.E">
+<link rel="apple-touch-icon" href="assets/pwa/apple-touch-icon.png">
+<link rel="apple-touch-startup-image" media="screen and (device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="assets/pwa/splash-1320x2868.jpg">
+<link rel="apple-touch-startup-image" media="screen and (device-width: 402px) and (device-height: 874px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="assets/pwa/splash-1206x2622.jpg">
+<link rel="apple-touch-startup-image" media="screen and (device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="assets/pwa/splash-1290x2796.jpg">
+<link rel="apple-touch-startup-image" media="screen and (device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="assets/pwa/splash-1179x2556.jpg">
+<link rel="apple-touch-startup-image" media="screen and (device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="assets/pwa/splash-1284x2778.jpg">
+<link rel="apple-touch-startup-image" media="screen and (device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="assets/pwa/splash-1170x2532.jpg">
+<link rel="apple-touch-startup-image" media="screen and (device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="assets/pwa/splash-1125x2436.jpg">
+<link rel="apple-touch-startup-image" media="screen and (device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="assets/pwa/splash-1242x2688.jpg">
+<link rel="apple-touch-startup-image" media="screen and (device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="assets/pwa/splash-828x1792.jpg">
+<link rel="apple-touch-startup-image" media="screen and (device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)" href="assets/pwa/splash-750x1334.jpg">
+<link rel="apple-touch-startup-image" media="screen and (device-width: 414px) and (device-height: 736px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)" href="assets/pwa/splash-1242x2208.jpg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="app-C360926C.css">
+<link rel="stylesheet" href="app-791ABEEC.css">
 <!-- 字型不擋第一次繪製：先以系統字型畫出，字型到了再換（display=swap） -->
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@600;700;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap" media="print" onload="this.media='all'">
-<link rel="modulepreload" href="js/app-G4VKO676.js">
-<link rel="modulepreload" href="js/c-FHNABLHK.js">
-<link rel="modulepreload" href="js/c-ICR5TPHB.js">
-<link rel="modulepreload" href="js/c-VC7P5AMR.js">
-<link rel="modulepreload" href="js/c-V6577M23.js">
-<link rel="modulepreload" href="js/c-KES27VBP.js">
+<link rel="modulepreload" href="js/app-PTQCP77N.js">
+<link rel="modulepreload" href="js/c-EPHHOPM3.js">
+<link rel="modulepreload" href="js/c-WDAMQX27.js">
+<link rel="modulepreload" href="js/c-TVBTFTQ2.js">
 <link rel="modulepreload" href="js/c-6ZDK5XPD.js">
-<link rel="modulepreload" href="js/c-IBBGFP5D.js">
-<link rel="modulepreload" href="js/c-EUFGHZRB.js">
+<link rel="modulepreload" href="js/c-SOZDSHOT.js">
+<link rel="modulepreload" href="js/c-M6HUE74W.js">
+<link rel="modulepreload" href="js/c-RLZJW5D6.js">
+<link rel="modulepreload" href="js/c-ZOQ6OHE3.js">
+<link rel="modulepreload" href="js/c-SRDEBZ2K.js">
 <link rel="modulepreload" href="js/c-6O4G3XTV.js">
 <script>
 /* 執行設定：資料中心網址（與諮詢教材·專屬訂製同一個部署）、Google 登入 client id；?mock=1 才用示範資料 */
@@ -29,7 +48,7 @@ window.GRACE_CONFIG = {
   GAS_URL: 'https://script.google.com/macros/s/AKfycbyi0Ft0XQtzcJUNyGWd4SF-isIKl5gW8ANhwBm7iWQossIuOGyXiC_inruOXF_M4MaV/exec',
   GOOGLE_CLIENT_ID: '423060878330-9jb6rn4i2lr4lalgvuv39nu6acb8ukcp.apps.googleusercontent.com',
   CONSULT_BASE: 'https://grace63188.github.io/consult-prep/',
-  BUILD: '2026-11-11 21:42'
+  BUILD: '2026-11-12 01:57'
 };
 </script>
 
@@ -50,9 +69,12 @@ window.GRACE_CONFIG = {
   if (!s) return;
   var app = document.getElementById('app'); app.innerHTML = s.html; app.dataset.shell = mq; if (mq === 'm') document.body.classList.add('m');
   window.GRACE_BOOT_SNAP = { hash: h, at: s.at }; try { performance.mark('grace:snap'); } catch (e) {}
+  /* v74：主程式載入前在這個畫面上按的按鈕先記下來（src/admin/snapclick.js 接手，真正的畫面換上後重做） */
+  var E = window.GRACE_EARLY = { q: [], h: function (ev) { var t = ev.target; if (!t || !t.closest || !t.closest('#view[data-snap]')) return; var a = t.closest('a[href]'), act = t.closest('[data-act]'); if ((a && !act) || (!act && t.closest('[data-go], [data-href]'))) return; if (a) ev.preventDefault(); E.q.push({ el: t, t: Date.now() }); if (E.q.length > 3) E.q.shift(); } };
+  document.addEventListener('click', E.h, true); try { performance.mark('grace:live'); } catch (e) {}
 } catch (e) { /* 沒有開啟快照：照常啟動 */ } })();
 </script>
-<script>window.GRACE_CHUNKS={"members":["js/c-QC2B2PCF.js","js/c-ZPVTGGU3.js","js/c-FX2O4IB5.js","js/c-K7JI4ZJR.js","js/c-L3SRK7NQ.js","js/c-KYAVALQM.js","js/c-KTYYS34K.js","js/c-JXXK3WCU.js","js/c-H2GO6LDY.js","js/c-SL5CW72D.js","js/c-LMMZC7TI.js"],"letters":["js/c-O3ULNC4N.js","js/c-XCLO7X5Y.js","js/c-R6XMFPUC.js","js/c-L3SRK7NQ.js","js/c-4J5C25IY.js","js/c-LMMZC7TI.js"],"reward":["js/c-SW462NSK.js","js/c-6WRAD25A.js","js/c-4YAYOUPK.js","js/c-JXXK3WCU.js","js/c-465J3BFN.js","js/c-L3SRK7NQ.js","js/c-TBM7GWVJ.js","js/c-RX6YSC6R.js","js/c-IIHLOUSG.js","js/c-LMMZC7TI.js"],"ship":["js/c-6KYM6TBV.js","js/c-XCLO7X5Y.js","js/c-R6XMFPUC.js","js/c-L3SRK7NQ.js","js/c-465J3BFN.js"],"notify":["js/c-URAABQIF.js","js/c-FHZWNCQB.js","js/c-AQYI7ZKQ.js","js/c-PGY4YKF5.js","js/c-QUMEJHCE.js","js/c-465J3BFN.js","js/c-L3SRK7NQ.js","js/c-FX2O4IB5.js","js/c-K7JI4ZJR.js","js/c-KYAVALQM.js","js/c-KTYYS34K.js","js/c-JXXK3WCU.js","js/c-TBM7GWVJ.js","js/c-FNLWKS4G.js","js/c-RX6YSC6R.js","js/c-SL5CW72D.js","js/c-6EX5SOLG.js","js/c-LMMZC7TI.js"],"templates":["js/c-A637NC57.js","js/c-FHZWNCQB.js","js/c-AQYI7ZKQ.js","js/c-PGY4YKF5.js","js/c-QUMEJHCE.js","js/c-465J3BFN.js","js/c-L3SRK7NQ.js","js/c-FX2O4IB5.js","js/c-K7JI4ZJR.js","js/c-KYAVALQM.js","js/c-KTYYS34K.js","js/c-JXXK3WCU.js","js/c-TBM7GWVJ.js","js/c-FNLWKS4G.js","js/c-RX6YSC6R.js","js/c-SL5CW72D.js","js/c-6EX5SOLG.js","js/c-LMMZC7TI.js"],"settings":["js/c-5D5EYHKX.js","js/c-FHZWNCQB.js","js/c-AQYI7ZKQ.js","js/c-PGY4YKF5.js","js/c-QUMEJHCE.js","js/c-465J3BFN.js","js/c-L3SRK7NQ.js","js/c-FX2O4IB5.js","js/c-K7JI4ZJR.js","js/c-KYAVALQM.js","js/c-KTYYS34K.js","js/c-JXXK3WCU.js","js/c-TBM7GWVJ.js","js/c-FNLWKS4G.js","js/c-RX6YSC6R.js","js/c-SL5CW72D.js","js/c-6EX5SOLG.js","js/c-LMMZC7TI.js"],"login":["js/c-XAIDLCUD.js"],"home":["js/c-2UXSASPL.js","js/c-AQYI7ZKQ.js","js/c-P2GE7NT2.js","js/c-R6XMFPUC.js","js/c-R42YS2MZ.js","js/c-6WRAD25A.js","js/c-4YAYOUPK.js","js/c-JXXK3WCU.js","js/c-FX2O4IB5.js","js/c-K7JI4ZJR.js","js/c-L3SRK7NQ.js","js/c-KYAVALQM.js","js/c-KTYYS34K.js","js/c-FNLWKS4G.js","js/c-RX6YSC6R.js","js/c-SL5CW72D.js","js/c-IIHLOUSG.js","js/c-NON2J2C7.js","js/c-6EX5SOLG.js","js/c-LMMZC7TI.js"],"workbench":["js/c-4BCKBZCA.js","js/c-LMMZC7TI.js","js/c-L3SRK7NQ.js"],"plan":["js/c-O4EXKAPU.js","js/c-P2GE7NT2.js","js/c-R6XMFPUC.js","js/c-R42YS2MZ.js","js/c-6WRAD25A.js","js/c-4YAYOUPK.js","js/c-JXXK3WCU.js","js/c-FX2O4IB5.js","js/c-K7JI4ZJR.js","js/c-L3SRK7NQ.js","js/c-KYAVALQM.js","js/c-KTYYS34K.js","js/c-IIHLOUSG.js","js/c-LMMZC7TI.js"],"review":["js/c-UEM4NDQC.js","js/c-37R4IOPP.js","js/c-LMMZC7TI.js","js/c-L3SRK7NQ.js","js/c-4YAYOUPK.js","js/c-FX2O4IB5.js","js/c-K7JI4ZJR.js","js/c-KYAVALQM.js","js/c-KTYYS34K.js","js/c-JXXK3WCU.js"],"consult":["js/c-6GOGO7P2.js","js/c-76VKJZQJ.js","js/c-37R4IOPP.js","js/c-LMMZC7TI.js","js/c-L3SRK7NQ.js","js/c-JWJXC57O.js","js/c-QUMEJHCE.js","js/c-465J3BFN.js","js/c-FNLWKS4G.js","js/c-RX6YSC6R.js","js/c-SL5CW72D.js","js/c-K7JI4ZJR.js","js/c-KTYYS34K.js","js/c-JXXK3WCU.js"],"custom":["js/c-Z72SGQ5M.js","js/c-JWJXC57O.js","js/c-QUMEJHCE.js","js/c-465J3BFN.js","js/c-L3SRK7NQ.js","js/c-FNLWKS4G.js","js/c-RX6YSC6R.js","js/c-SL5CW72D.js","js/c-LMMZC7TI.js"],"deadline":["js/c-BJ55KBGI.js","js/c-4YAYOUPK.js","js/c-NON2J2C7.js","js/c-6EX5SOLG.js","js/c-KYAVALQM.js","js/c-KTYYS34K.js","js/c-JXXK3WCU.js","js/c-L3SRK7NQ.js","js/c-FX2O4IB5.js","js/c-K7JI4ZJR.js","js/c-LMMZC7TI.js"],"student":["js/c-MA7XELUQ.js","js/c-ZPVTGGU3.js","js/c-FX2O4IB5.js","js/c-K7JI4ZJR.js","js/c-L3SRK7NQ.js","js/c-KYAVALQM.js","js/c-KTYYS34K.js","js/c-JXXK3WCU.js","js/c-4J5C25IY.js","js/c-PGY4YKF5.js","js/c-QUMEJHCE.js","js/c-465J3BFN.js","js/c-R42YS2MZ.js","js/c-6WRAD25A.js","js/c-4YAYOUPK.js","js/c-76VKJZQJ.js","js/c-37R4IOPP.js","js/c-LMMZC7TI.js","js/c-JWJXC57O.js","js/c-FNLWKS4G.js","js/c-RX6YSC6R.js","js/c-SL5CW72D.js","js/c-7GLYVICV.js","js/c-H2GO6LDY.js","js/c-IIHLOUSG.js","js/c-NON2J2C7.js","js/c-6EX5SOLG.js"]};(function(){try{var m=(location.hash.match(/^#\/([a-z]+)/)||[])[1]||'home',l=(window.GRACE_CHUNKS[m]||[]).concat(/^\d+$/.test((location.hash.split('/')[2]||''))?window.GRACE_CHUNKS.consult||[]:[]);for(var i=0;i<l.length;i++){var k=document.createElement('link');k.rel='modulepreload';k.href=l[i];document.head.appendChild(k);}}catch(e){}})();</script>
-<script type="module" src="js/app-G4VKO676.js"></script>
+<script>window.GRACE_CHUNKS={"members":["js/c-WPL5XZBY.js","js/c-WGES3WCR.js","js/c-RMRSBM7K.js","js/c-LMQHIZMG.js","js/c-N42MWTBS.js","js/c-GVJQRIBR.js","js/c-JXXK3WCU.js","js/c-2LYVJFDH.js","js/c-SL5CW72D.js","js/c-R47OTGJF.js","js/c-4UNZSDDS.js"],"letters":["js/c-JFHJRIZV.js","js/c-BNSEQERT.js","js/c-4JNK6H4U.js","js/c-UQSYYOCQ.js","js/c-R47OTGJF.js","js/c-4UNZSDDS.js"],"reward":["js/c-Y6QV37QF.js","js/c-SDDMM46I.js","js/c-L6ALISFU.js","js/c-JXXK3WCU.js","js/c-TB5J5VQW.js","js/c-TBM7GWVJ.js","js/c-OYAM7O5E.js","js/c-IIHLOUSG.js","js/c-R47OTGJF.js","js/c-4UNZSDDS.js"],"ship":["js/c-LIHS5RBX.js","js/c-BNSEQERT.js","js/c-4JNK6H4U.js","js/c-TB5J5VQW.js","js/c-4UNZSDDS.js"],"notify":["js/c-LDJAXA2S.js","js/c-2OYXIWNZ.js","js/c-GU33IU5M.js","js/c-BGLAIJXY.js","js/c-FH6K6ADK.js","js/c-TB5J5VQW.js","js/c-RMRSBM7K.js","js/c-LMQHIZMG.js","js/c-N42MWTBS.js","js/c-GVJQRIBR.js","js/c-JXXK3WCU.js","js/c-TBM7GWVJ.js","js/c-2ZQORSPQ.js","js/c-OYAM7O5E.js","js/c-SL5CW72D.js","js/c-6EX5SOLG.js","js/c-4UNZSDDS.js","js/c-R47OTGJF.js"],"templates":["js/c-CHXJGZFH.js","js/c-2OYXIWNZ.js","js/c-GU33IU5M.js","js/c-BGLAIJXY.js","js/c-FH6K6ADK.js","js/c-TB5J5VQW.js","js/c-RMRSBM7K.js","js/c-LMQHIZMG.js","js/c-N42MWTBS.js","js/c-GVJQRIBR.js","js/c-JXXK3WCU.js","js/c-TBM7GWVJ.js","js/c-2ZQORSPQ.js","js/c-OYAM7O5E.js","js/c-SL5CW72D.js","js/c-6EX5SOLG.js","js/c-4UNZSDDS.js","js/c-R47OTGJF.js"],"settings":["js/c-UGH5V5CW.js","js/c-2OYXIWNZ.js","js/c-GU33IU5M.js","js/c-BGLAIJXY.js","js/c-FH6K6ADK.js","js/c-TB5J5VQW.js","js/c-RMRSBM7K.js","js/c-LMQHIZMG.js","js/c-N42MWTBS.js","js/c-GVJQRIBR.js","js/c-JXXK3WCU.js","js/c-TBM7GWVJ.js","js/c-2ZQORSPQ.js","js/c-OYAM7O5E.js","js/c-SL5CW72D.js","js/c-6EX5SOLG.js","js/c-4UNZSDDS.js","js/c-NGDGL474.js","js/c-R47OTGJF.js"],"login":["js/c-T72VFSVW.js"],"home":["js/c-WGLV4AJN.js","js/c-NGDGL474.js","js/c-GU33IU5M.js","js/c-7FLDHDCM.js","js/c-4JNK6H4U.js","js/c-5H7TJSBT.js","js/c-SDDMM46I.js","js/c-L6ALISFU.js","js/c-JXXK3WCU.js","js/c-RMRSBM7K.js","js/c-LMQHIZMG.js","js/c-N42MWTBS.js","js/c-GVJQRIBR.js","js/c-4UNZSDDS.js","js/c-2ZQORSPQ.js","js/c-OYAM7O5E.js","js/c-SL5CW72D.js","js/c-IIHLOUSG.js","js/c-QAY2UZHR.js","js/c-6EX5SOLG.js","js/c-R47OTGJF.js"],"workbench":["js/c-YHKCXJEH.js","js/c-R47OTGJF.js","js/c-4UNZSDDS.js"],"plan":["js/c-24EGR466.js","js/c-7FLDHDCM.js","js/c-4JNK6H4U.js","js/c-5H7TJSBT.js","js/c-SDDMM46I.js","js/c-L6ALISFU.js","js/c-JXXK3WCU.js","js/c-RMRSBM7K.js","js/c-LMQHIZMG.js","js/c-N42MWTBS.js","js/c-GVJQRIBR.js","js/c-4UNZSDDS.js","js/c-IIHLOUSG.js","js/c-R47OTGJF.js"],"review":["js/c-GKW6ZBES.js","js/c-M7B6VF55.js","js/c-R47OTGJF.js","js/c-4UNZSDDS.js","js/c-L6ALISFU.js","js/c-RMRSBM7K.js","js/c-LMQHIZMG.js","js/c-N42MWTBS.js","js/c-GVJQRIBR.js","js/c-JXXK3WCU.js"],"consult":["js/c-KOUJ2AEB.js","js/c-7QPCJ5GU.js","js/c-M7B6VF55.js","js/c-R47OTGJF.js","js/c-4UNZSDDS.js","js/c-YH4BDR5B.js","js/c-FH6K6ADK.js","js/c-TB5J5VQW.js","js/c-2ZQORSPQ.js","js/c-OYAM7O5E.js","js/c-SL5CW72D.js","js/c-LMQHIZMG.js","js/c-GVJQRIBR.js","js/c-JXXK3WCU.js"],"custom":["js/c-RZYLHW4K.js","js/c-YH4BDR5B.js","js/c-FH6K6ADK.js","js/c-TB5J5VQW.js","js/c-2ZQORSPQ.js","js/c-OYAM7O5E.js","js/c-SL5CW72D.js","js/c-R47OTGJF.js","js/c-4UNZSDDS.js"],"deadline":["js/c-GDTKAC3M.js","js/c-L6ALISFU.js","js/c-QAY2UZHR.js","js/c-6EX5SOLG.js","js/c-N42MWTBS.js","js/c-GVJQRIBR.js","js/c-JXXK3WCU.js","js/c-RMRSBM7K.js","js/c-LMQHIZMG.js","js/c-R47OTGJF.js","js/c-4UNZSDDS.js"],"student":["js/c-U3F7UL5Y.js","js/c-WGES3WCR.js","js/c-RMRSBM7K.js","js/c-LMQHIZMG.js","js/c-N42MWTBS.js","js/c-GVJQRIBR.js","js/c-JXXK3WCU.js","js/c-UQSYYOCQ.js","js/c-BGLAIJXY.js","js/c-FH6K6ADK.js","js/c-TB5J5VQW.js","js/c-5H7TJSBT.js","js/c-SDDMM46I.js","js/c-L6ALISFU.js","js/c-7QPCJ5GU.js","js/c-M7B6VF55.js","js/c-R47OTGJF.js","js/c-4UNZSDDS.js","js/c-YH4BDR5B.js","js/c-2ZQORSPQ.js","js/c-OYAM7O5E.js","js/c-SL5CW72D.js","js/c-K2LO5R3Y.js","js/c-2LYVJFDH.js","js/c-IIHLOUSG.js","js/c-QAY2UZHR.js","js/c-6EX5SOLG.js"]};(function(){try{var m=(location.hash.match(/^#\/([a-z]+)/)||[])[1]||'home',l=(window.GRACE_CHUNKS[m]||[]).concat(/^\d+$/.test((location.hash.split('/')[2]||''))?window.GRACE_CHUNKS.consult||[]:[]);for(var i=0;i<l.length;i++){var k=document.createElement('link');k.rel='modulepreload';k.href=l[i];document.head.appendChild(k);}}catch(e){}})();</script>
+<script type="module" src="js/app-PTQCP77N.js"></script>
 </body>
 </html>
