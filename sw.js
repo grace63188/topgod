@@ -1,79 +1,39 @@
-/* 學院學習管理 Service Worker（v73 速度架構）：建置時填入版本與預載清單（scripts/build.mjs）
- *  用途只有一個：把本站靜態殼（index.html、js/、樣式、標誌）放在裝置上，重新開啟不必等網路
- *  快取名稱帶建置版本：新版＝新快取，舊快取在新版啟用時刪除
- *  不經手：資料中心（script.google.com）、Google 登入、字型與其他網域一律不攔截——資料照舊由頁面的 SWR 快取處理，這裡不會把舊回應當新的；
- *          version.json、sw.js、go.html、assets/cards（LINE 圖卡素材）、vendor/、帶 nosw 參數、Range 請求、非 GET 一律直接走網路
- *  新版：install 預載新版殼；不自動接手，等頁面確認沒有編輯中（buildwatch）送 {type:'skip'} 才 skipWaiting；導覽網址 ?v= 不是本版 → 走網路
- *  v67 主畫面 App：同一個 Service Worker 也處理推播——push 不帶內容 → 以取回金鑰（IndexedDB grace-sw/kv push）呼叫資料中心 lms_push_pull 取回通知顯示；點通知 → 開啟對應頁（#/…）
- *          資料中心的回應只拿來顯示通知，一律不放進快取；manifest.webmanifest、啟動畫面直接走網路
+/* 學院學習管理 Service Worker（v74.1 熱修）：只處理推播，不攔截任何請求
+ *  v74.1：拿掉 fetch 處理器——iOS（Safari 與主畫面 App）頁面受「有 fetch 處理器」的 Service Worker 控制時，所有請求（含資料中心 script.google.com
+ *         與其 302 轉到 script.googleusercontent.com）都先送進 Service Worker 行程再退回網路；Service Worker 行程被系統暫停／終止後，
+ *         資料中心呼叫回「Load failed」或一直沒有回應（登入停在「正在向資料中心驗證」）。沒有 fetch 處理器 → 瀏覽器完全不經過 Service Worker
+ *  不快取任何東西：上一版的靜態殼快取（grace-shell-*）在啟用時刪除
+ *  新版：install 立即 skipWaiting、activate clients.claim；從有 fetch 處理器的舊版升級時（還有 grace-shell-* 快取）→ 已開的視窗重新載入一次，直接改用新版
+ *  v67 主畫面 App：push 不帶內容 → 以取回金鑰（IndexedDB grace-sw/kv push）呼叫資料中心 lms_push_pull 取回通知顯示；點通知 → 開啟對應頁（#/…）
  */
-const BUILD = '2026-11-12 01:57';
-const SHELL = 'grace-shell-' + BUILD;
-const PRECACHE = ["index.html","app-791ABEEC.css","js/c-WPL5XZBY.js","js/c-JFHJRIZV.js","js/c-Y6QV37QF.js","js/c-LIHS5RBX.js","js/c-BNSEQERT.js","js/c-LDJAXA2S.js","js/c-CHXJGZFH.js","js/c-UGH5V5CW.js","js/c-2OYXIWNZ.js","js/c-T72VFSVW.js","js/c-WGLV4AJN.js","js/c-NGDGL474.js","js/c-GU33IU5M.js","js/c-YHKCXJEH.js","js/c-24EGR466.js","js/c-7FLDHDCM.js","js/c-4JNK6H4U.js","js/c-GKW6ZBES.js","js/c-KOUJ2AEB.js","js/c-RZYLHW4K.js","js/c-GDTKAC3M.js","js/c-U3F7UL5Y.js","js/c-WGES3WCR.js","js/c-UQSYYOCQ.js","js/c-BGLAIJXY.js","js/c-5H7TJSBT.js","js/c-SDDMM46I.js","js/c-7QPCJ5GU.js","js/c-M7B6VF55.js","js/c-YH4BDR5B.js","js/c-FH6K6ADK.js","js/c-TB5J5VQW.js","js/c-L6ALISFU.js","js/app-PTQCP77N.js","js/c-YF3JB6A5.js","js/c-FVBPJXR2.js","js/c-TBM7GWVJ.js","js/c-LZJLUCLU.js","js/c-2SOR5DM6.js","js/c-J4TTJQKQ.js","js/c-2ZQORSPQ.js","js/c-EPHHOPM3.js","js/c-OYAM7O5E.js","js/c-PHLMKXJK.js","js/c-K2LO5R3Y.js","js/c-2LYVJFDH.js","js/c-IIHLOUSG.js","js/c-QAY2UZHR.js","js/c-6EX5SOLG.js","js/c-RMRSBM7K.js","js/c-LMQHIZMG.js","js/c-N42MWTBS.js","js/c-GVJQRIBR.js","js/c-JXXK3WCU.js","js/c-SL5CW72D.js","js/c-4PKRTJQU.js","js/c-R47OTGJF.js","js/c-4UNZSDDS.js","js/c-M6HUE74W.js","js/c-RLZJW5D6.js","js/c-SRDEBZ2K.js","js/c-WDAMQX27.js","js/c-TVBTFTQ2.js","js/c-ZOQ6OHE3.js","js/c-6O4G3XTV.js","js/c-SOZDSHOT.js","js/c-6ZDK5XPD.js","assets/ui/a/logo.png","assets/logo.png","assets/pwa/icon-192.png","assets/pwa/badge-96.png"];
-const PASS = /^(version\.json|sw\.js|go\.html|robots\.txt|manifest\.webmanifest)$|^assets\/cards\/|^vendor\/|^assets\/pwa\/splash-/;
+const BUILD = '2026-11-12 12:38';
+/* 本版靜態檔清單：不快取，只給 scripts/publish-copy.mjs 下次發布時保留本版檔案（GitHub Pages index.html 有 10 分鐘快取） */
+const PRECACHE = ["index.html","app-791ABEEC.css","js/c-LGRYKR3A.js","js/c-PJBYJGAO.js","js/c-CJUVHQAA.js","js/c-75CJLD4X.js","js/c-MUIRT65W.js","js/c-V2WCE2IN.js","js/c-M2XHKANQ.js","js/c-LWA4LUEC.js","js/c-74AKMTMJ.js","js/c-7ZCA3QWB.js","js/c-OHGPOHV7.js","js/c-A65SEW2N.js","js/c-GU33IU5M.js","js/c-EJWGU4F2.js","js/c-RWCFPGRG.js","js/c-Y5T2XTDZ.js","js/c-4JNK6H4U.js","js/c-RZC2HK3N.js","js/c-I3Q2UVUA.js","js/c-6G7PS3SE.js","js/c-2O7SSWKF.js","js/c-FKUY3XOR.js","js/c-WGES3WCR.js","js/c-UQSYYOCQ.js","js/c-BGLAIJXY.js","js/c-5H7TJSBT.js","js/c-SDDMM46I.js","js/c-CTLTXYUQ.js","js/c-LIPKSVHB.js","js/c-YH4BDR5B.js","js/c-FH6K6ADK.js","js/c-TB5J5VQW.js","js/c-L6ALISFU.js","js/app-3KGPEE4Z.js","js/c-YF3JB6A5.js","js/c-FVBPJXR2.js","js/c-TBM7GWVJ.js","js/c-Q3JSN2KN.js","js/c-2SOR5DM6.js","js/c-J4TTJQKQ.js","js/c-2ZQORSPQ.js","js/c-EPHHOPM3.js","js/c-OYAM7O5E.js","js/c-PYFC6XWI.js","js/c-K2LO5R3Y.js","js/c-TA63J2J5.js","js/c-IIHLOUSG.js","js/c-QAY2UZHR.js","js/c-6EX5SOLG.js","js/c-RMRSBM7K.js","js/c-LMQHIZMG.js","js/c-N42MWTBS.js","js/c-GVJQRIBR.js","js/c-JXXK3WCU.js","js/c-SL5CW72D.js","js/c-SZUN2LAO.js","js/c-HX4KU347.js","js/c-4UNZSDDS.js","js/c-6RXIPGG2.js","js/c-RLZJW5D6.js","js/c-LQFKJJSW.js","js/c-WDAMQX27.js","js/c-TVBTFTQ2.js","js/c-ZOQ6OHE3.js","js/c-6O4G3XTV.js","js/c-SOZDSHOT.js","js/c-6ZDK5XPD.js","assets/ui/a/logo.png","assets/logo.png","assets/pwa/icon-192.png","assets/pwa/badge-96.png"];
 const SCOPE = new URL(self.registration.scope);
 
-self.addEventListener('install', (e) => {
-  e.waitUntil((async () => {
-    const c = await caches.open(SHELL);
-    /* 帶雜湊的檔（內容不變）先從上一版快取搬過來，不重新下載 */
-    const olds = (await caches.keys()).filter((k) => k.indexOf('grace-shell-') === 0 && k !== SHELL);
-    const reuse = async (u) => { if (!/-[0-9A-Z]{8}\.(js|css)$/.test(u)) return null; for (const k of olds) { const hit = await (await caches.open(k)).match(u); if (hit) return hit; } return null; };
-    const one = async (u) => {
-      let r = await reuse(u);
-      if (!r) r = await fetch(new Request(u, { cache: 'reload' }));
-      /* index.html 必須是本版（CDN 尚未更新時再取一次；仍不是 → 安裝失敗，瀏覽器之後再試，舊版照常運作） */
-      if (u === 'index.html') {
-        let t = r.ok ? await r.clone().text() : '';
-        if (t.indexOf(BUILD) < 0) { await new Promise((ok) => setTimeout(ok, 3000)); r = await fetch(new Request(u + '?nosw=' + Date.now(), { cache: 'reload' })); t = r.ok ? await r.clone().text() : ''; }
-        if (t.indexOf(BUILD) < 0) throw new Error('index.html 尚未更新到 ' + BUILD);
-      }
-      if (!r.ok) throw new Error('預載失敗 ' + u + ' HTTP ' + r.status);
-      await c.put(u, r);
-    };
-    /* 一次 6 個，不把連線佔滿 */
-    const q = PRECACHE.slice(); const run = async () => { while (q.length) await one(q.shift()); };
-    await Promise.all([run(), run(), run(), run(), run(), run()]);
-  })());
-});
+self.addEventListener('install', () => { self.skipWaiting(); });
 self.addEventListener('activate', (e) => {
-  e.waitUntil((async () => {
-    for (const k of await caches.keys()) if (k.indexOf('grace-shell-') === 0 && k !== SHELL) await caches.delete(k);
+  let olds = [];
+  const ready = (async () => {
+    olds = (await caches.keys()).filter((k) => k.indexOf('grace-shell-') === 0);
+    for (const k of olds) await caches.delete(k);
     await self.clients.claim();
-  })());
+  })();
+  e.waitUntil(ready);
+  /* 從舊版（攔截請求）升級：已開的視窗重新載入，改由網路取得新版頁面（不再經過 Service Worker）。
+   *  不放進 waitUntil：導覽要等本版啟用完成，在 waitUntil 裡等導覽會互相卡住 */
+  ready.then(async () => {
+    if (!olds.length) return;
+    const list = await self.clients.matchAll({ type: 'window' });
+    for (const c of list) { try { const u = new URL(c.url); u.searchParams.set('v', BUILD.replace(/\D/g, '')); c.navigate(u.toString()).catch(() => {}); } catch (er) { /* 不支援 navigate：頁面自己的新版檢查會接手 */ } }
+  }).catch(() => {});
 });
 self.addEventListener('message', (e) => {
   const d = e.data || {};
   if (d.type === 'skip') self.skipWaiting();
   if (d.type === 'build' && e.ports && e.ports[0]) e.ports[0].postMessage({ type: 'build', build: BUILD });
 });
-
-self.addEventListener('fetch', (e) => {
-  const r = e.request;
-  if (r.method !== 'GET' || r.headers.has('range')) return;
-  const u = new URL(r.url);
-  if (u.origin !== SCOPE.origin || u.pathname.indexOf(SCOPE.pathname) !== 0) return;
-  const rel = u.pathname.slice(SCOPE.pathname.length);
-  if (PASS.test(rel) || u.searchParams.has('nosw')) return;
-  if (r.mode === 'navigate') { if (rel === '' || rel === 'index.html') e.respondWith(nav(r, u)); return; }
-  if (/^js\/[\w-]+\.js$/.test(rel) || /^app-[0-9A-Z]{8}\.css$/.test(rel) || /^assets\/(ui|lms)\//.test(rel) || rel === 'assets/logo.png' || /^assets\/pwa\/(icon-192|badge-96)\.png$/.test(rel)) e.respondWith(shell(r, rel));
-});
-/** 導覽：本版殼（不等網路）；網址指定其他版本（新版接手）→ 走網路 */
-async function nav(req, u) {
-  const v = u.searchParams.get('v');
-  if (v && v !== BUILD.replace(/\D/g, '')) { try { return await fetch(req); } catch (e) { /* 離線：退回本版 */ } }
-  const hit = await caches.match('index.html', { cacheName: SHELL });
-  if (hit) return hit;
-  return fetch(req);
-}
-/** 靜態檔：本版快取優先；沒有 → 網路並存入本版快取 */
-async function shell(req, rel) {
-  const c = await caches.open(SHELL), hit = await c.match(rel);
-  if (hit) return hit;
-  const r = await fetch(req);
-  if (r.ok && r.type === 'basic') c.put(rel, r.clone()).catch(() => {});
-  return r;
-}
+/* 刻意沒有 fetch 處理器（見檔頭 v74.1） */
 
 /* ── 推播 ── */
 function idb() {
