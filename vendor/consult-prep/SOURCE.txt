@@ -9,3 +9,4 @@ seed-data.js、mock-api.js：只在示範資料（?mock=1）載入，取自 grac
 2026.11.05（3.8.0 整合）：schema.js（BOOKMARKLET 3.8.0）、flex.js（匯報杏仁白＋杏仁白頂圖）、flex-render.js 取自 consult-prep-source main 006b28c，原樣複製
 2026.11.14（v83）：qa.html＝consult-prep-source feat/salon-lifecycle 建置的學姐作業頁（dist/qa/index.html），資料中心網址留空；只供示範資料與後台作業設計的嵌入預覽（正式環境嵌入 grace63188.github.io/consult-prep/qa/）
 2026.11.14（段落說明）：qa.html＝consult-prep-source feat/salon-section-desc（1a20ddf＋填寫說明保留換行、段落說明／範例、題目說明多行）建置的學姐作業頁，資料中心網址留空
+2026.11.14（hotfix 預覽開啟）：qa.html＝consult-prep-source hotfix/salon-open（4730b9a＋&preview=1 唯讀預覽、請求帶 preview、不讀寫本機副本）建置的學姐作業頁，資料中心網址留空

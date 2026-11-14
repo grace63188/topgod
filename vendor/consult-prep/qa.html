@@ -170,6 +170,8 @@
    *  預覽：預覽代碼（資料中心回 preview）或嵌入後台（&embed=1，由同網域的後台以 postMessage 傳入作業定義）→ 唯讀、不儲存、不留本機副本 */
   var C = window.CONSULT_CONFIG || {}, q = /[?&]t=([A-Za-z0-9]{24,40})(?:&|#|$)/.exec(location.search), t = q ? q[1] : '';
   var EMBED = /[?&]embed=1(?:&|#|$)/.test(location.search);
+  /* 後台「開啟她的作業頁／以…的連結開啟」（&preview=1）：唯讀預覽；資料中心不記錄開啟、不儲存；不讀寫本機副本 */
+  var PV = /[?&]preview=1(?:&|#|$)/.test(location.search);
   var DEF_CATS = [['biz', '事業經營', 'BUSINESS'], ['grow', '個人成長', 'GROWTH'], ['mkt', '行銷佈局', 'MARKETING']], MAX = 30;
   var KEY = 'psqa:' + t, D = null, F = null, Q = [], A = [], dirty = false, busy = false, saveT = 0, lastErr = '';
   var $ = function (id) { return document.getElementById(id); };
@@ -189,15 +191,15 @@
   function has(v) { return Array.isArray(v) ? v.length > 0 : clean(v) !== ''; }
   function filled() { return A.filter(has).length; }
   function reqLeft() { return Q.filter(function (e) { return e.q.req !== false && !has(A[e.k]); }); }
-  function preview() { return !!(D && (D.preview || D.readonly)); }
+  function preview() { return PV || !!(D && (D.preview || D.readonly)); }
   function locked() { return !!(D && (preview() || D.locked || parse(D.series.dueAt) + 60000 <= Date.now())); }
   function sent() { return !!(D && D.submittedAt); }
-  function store() { if (preview() || EMBED) return; try { localStorage.setItem(KEY, JSON.stringify({ d: D, a: A, dirty: dirty, at: Date.now() })); } catch (e) { /* 私密瀏覽：不留本機副本 */ } }
+  function store() { if (preview() || EMBED || PV) return; try { localStorage.setItem(KEY, JSON.stringify({ d: D, a: A, dirty: dirty, at: Date.now() })); } catch (e) { /* 私密瀏覽：不留本機副本 */ } }
   function call(action, payload, cb, onErr) {
     var x = new XMLHttpRequest(); x.open('POST', C.GAS_URL, true); x.setRequestHeader('Content-Type', 'text/plain;charset=utf-8'); x.timeout = 45000;
     x.onload = function () { var j = null; try { j = JSON.parse(x.responseText); } catch (e) { j = null; } if (j && j.ok) cb(j.data || {}); else onErr(j && j.error ? j.error : '資料中心沒有回應，請稍後再試', j && j.code); };
     x.onerror = x.ontimeout = function () { onErr('網路連線中斷，內容已保留在這台裝置，恢復連線後再按一次'); };
-    var b = { action: action, t: t }; for (var k in payload) b[k] = payload[k]; x.send(JSON.stringify(b));
+    var b = { action: action, t: t }; if (PV) b.preview = 1; for (var k in payload) b[k] = payload[k]; x.send(JSON.stringify(b));
   }
   /** 作答陣列對齊定義（長度、題型） */
   function fit(a) { return Q.map(function (e) { var v = (a || [])[e.k]; if (e.q.type === 'multi') return Array.isArray(v) ? v.slice() : []; return Array.isArray(v) ? '' : (v == null ? '' : String(v)); }); }
@@ -215,6 +217,7 @@
     $('dlv').textContent = fmt(s.dueAt, true); $('joinv').textContent = fmt(s.joinAt); $('openv').textContent = fmtM(s.openAt);
     $('sideDl').textContent = fmt(s.dueAt, true); $('sideJoin').textContent = fmt(s.joinAt);
     $('pvbar').hidden = !preview();
+    if (PV && D && D.name && !/預覽/.test(D.name)) { $('pvbar').innerHTML = '<span class="tag">預覽</span><span>' + esc(D.name) + ' 的作業頁</span><small>唯讀・不儲存、不記錄開啟</small>'; }
   }
   function badge(x, v) { return x.req === false ? '<span class="badge sel">選填</span>' : '<span class="badge ' + (has(v) ? 'ok">已填' : 'req">必填') + '</span>'; }
   function fieldHtml(e) {
@@ -333,7 +336,7 @@
       store(); stateUi();
     });
   }
-  window.addEventListener('pagehide', function () { if (dirty && D && !locked() && navigator.sendBeacon && C.GAS_URL) { try { navigator.sendBeacon(C.GAS_URL, new Blob([JSON.stringify({ action: 'lms_ps_q_save', t: t, answers: A, fv: D.fv || (F && F.v) || 1 })], { type: 'text/plain;charset=utf-8' })); } catch (e) { /* ignore */ } } });
+  window.addEventListener('pagehide', function () { if (!PV && dirty && D && !locked() && navigator.sendBeacon && C.GAS_URL) { try { navigator.sendBeacon(C.GAS_URL, new Blob([JSON.stringify({ action: 'lms_ps_q_save', t: t, answers: A, fv: D.fv || (F && F.v) || 1 })], { type: 'text/plain;charset=utf-8' })); } catch (e) { /* ignore */ } } });
 
   /* ── 開啟：先畫本機副本（立即），再向資料中心取最新 ── */
   function fail(m) { $('body').innerHTML = '<p class="fail">' + esc(m) + '</p>'; $('topSave').innerHTML = '<span class="warn">無法開啟</span>'; $('h1').textContent = '入群前作業'; $('who').textContent = '—'; }
@@ -355,7 +358,7 @@
   if (EMBED) { try { window.parent.postMessage({ psqa: 'ready' }, location.origin); } catch (e) { /* ignore */ } if (!t || !C.GAS_URL) return; }
   if (!t) { fail('連結不完整，請回到 LINE 重新開啟入群前作業'); return; }
   var cached = null; try { cached = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) { cached = null; }
-  if (!EMBED && cached && cached.d && cached.d.series) { setData(cached.d); A = fit(cached.a || D.answers); dirty = !!cached.dirty; draw(); }
+  if (!EMBED && !PV && cached && cached.d && cached.d.series) { setData(cached.d); A = fit(cached.a || D.answers); dirty = !!cached.dirty; draw(); }
   if (!C.GAS_URL) { if (!D) fail('預覽模式：正式網站會讀取學姐的作業'); return; }
   load();
 })();
