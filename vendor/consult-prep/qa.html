@@ -107,6 +107,13 @@
 .pvbar{position:sticky;top:0;z-index:60;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:4px 10px;padding:8px 16px;background:#2A1F3D;color:#E4D8FF;font-size:13px;font-weight:600;letter-spacing:.04em;box-shadow:0 1px 0 rgba(201,182,250,.45)}
 .pvbar .tag{padding:1px 10px;border-radius:99px;background:#C9B6FA;color:#2A1F3D}
 .pvbar small{font-weight:400;opacity:.85}
+.pvbar[hidden]{display:none}  /* 前台 [hidden]{display:none} 與 .pvbar 同權重、較早出現 → 一般學姐頁也會顯示預覽列 */
+/* 填寫說明、段落說明、段落範例、題目說明：校長有填才顯示；保留換行 */
+.ml{white-space:pre-line;overflow-wrap:anywhere}
+.sec-d{font-size:14px;color:var(--text-2);line-height:1.75;margin:6px 0 12px;max-width:var(--measure)}
+.sec-ex{margin:0 0 12px;padding:10px 14px;border-radius:var(--r-md);background:var(--ink-2);box-shadow:inset 2px 0 0 var(--gold),var(--shadow-ring)}
+.sec-ex b{display:block;font-size:12px;font-weight:600;letter-spacing:.08em;color:var(--gold);margin-bottom:4px}
+.sec-ex div{font-size:14px;color:var(--text-2);line-height:1.75}
 </style>
 </head>
 <body>
@@ -173,6 +180,8 @@
   function fmtM(v) { var m = /^(\d{4})-(\d{2})$/.exec(String(v || '')); return m ? m[1] + '.' + m[2] : fmt(v); }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function chars(s) { return Array.from(String(s == null ? '' : s)); }
+  /** 多行文字（說明、範例）：保留換行，其他控制字元改空白 */
+  function ml(s) { return String(s == null ? '' : s).replace(/\r\n?/g, '\n').replace(/[\u0000-\u0009\u000b-\u001f\u007f\u2028\u2029]/g, ' ').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim(); }
   function clean(s) { return String(s == null ? '' : s).replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, ' ').replace(/\s+/g, ' ').trim(); }
   function defForm() { return { v: 1, title: '', intro: '', sections: DEF_CATS.map(function (c) { return { id: c[0], t: c[1], en: c[2], qs: [1, 2, 3].map(function (n) { return { id: c[0] + '-' + n, t: '提問 ' + n, type: 'short', max: MAX, req: true }; }) }; }) }; }
   function flat(f) { var o = []; (f.sections || []).forEach(function (s, si) { (s.qs || []).forEach(function (x, qi) { o.push({ q: x, si: si, qi: qi, k: o.length }); }); }); return o; }
@@ -201,7 +210,7 @@
     $('tt').textContent = title;
     $('h1').innerHTML = F.title || s.title ? esc(title) : '<span class="nw">' + esc(full) + '</span><br><span class="nw">入群前作業</span>';
     $('eyebrow').textContent = (s.tag ? s.tag + '・' : '') + '入群前作業';
-    $('tkEn').innerHTML = s.tag === '五週年慶' ? 'FIVE YEARS<br>PRIVATE SESSION' : 'PRIVATE SESSION';
+    $('tkEn').textContent = 'PRIVATE SESSION';
     $('who').textContent = D.name || '—';
     $('dlv').textContent = fmt(s.dueAt, true); $('joinv').textContent = fmt(s.joinAt); $('openv').textContent = fmtM(s.openAt);
     $('sideDl').textContent = fmt(s.dueAt, true); $('sideJoin').textContent = fmt(s.joinAt);
@@ -210,11 +219,11 @@
   function badge(x, v) { return x.req === false ? '<span class="badge sel">選填</span>' : '<span class="badge ' + (has(v) ? 'ok">已填' : 'req">必填') + '</span>'; }
   function fieldHtml(e) {
     var x = e.q, k = e.k, v = A[k], ro = locked();
-    var lab = '<label class="l"' + (isText(x) ? ' for="q' + k + '"' : '') + '><span class="q">Q' + (e.qi + 1) + '</span>' + esc(x.t) + badge(x, v) + '</label>' + (x.d ? '<div class="desc">' + esc(x.d) + '</div>' : '');
+    var lab = '<label class="l"' + (isText(x) ? ' for="q' + k + '"' : '') + '><span class="q">Q' + (e.qi + 1) + '</span>' + esc(x.t) + badge(x, v) + '</label>' + (ml(x.d) ? '<div class="desc ml" id="d' + k + '">' + esc(ml(x.d)) + '</div>' : '');
     if (isText(x)) {
       var mx = x.max || MAX, n = chars(v).length, full = n >= mx;
       return '<div class="qf' + (full ? ' full' : '') + (has(v) ? '' : ' miss') + '" data-k="' + k + '">' + lab +
-        '<div class="inp area"><textarea id="q' + k + '" data-k="' + k + '" rows="' + (x.type === 'para' ? 4 : 2) + '"' + (x.type === 'para' ? ' data-para="1"' : ' enterkeyhint="done"') + ' autocomplete="off"' + (ro ? ' readonly' : '') + ' aria-describedby="m' + k + '"' + (x.type === 'para' ? ' style="height:auto;min-height:96px"' : '') + '>' + esc(v) + '</textarea></div>' +
+        '<div class="inp area"><textarea id="q' + k + '" data-k="' + k + '" rows="' + (x.type === 'para' ? 4 : 2) + '"' + (x.type === 'para' ? ' data-para="1"' : ' enterkeyhint="done"') + ' autocomplete="off"' + (ro ? ' readonly' : '') + ' aria-describedby="' + (ml(x.d) ? 'd' + k + ' ' : '') + 'm' + k + '"' + (x.type === 'para' ? ' style="height:auto;min-height:96px"' : '') + '>' + esc(v) + '</textarea></div>' +
         '<div class="meta" id="m' + k + '">' + (full ? '<span class="lim">已達上限</span>' : '') + '<span><b>' + n + '</b>／' + mx + '</span></div></div>';
     }
     var body = '';
@@ -222,12 +231,14 @@
     else { var multi = x.type === 'multi'; body = '<div class="opts" role="' + (multi ? 'group' : 'radiogroup') + '" aria-label="' + esc(x.t) + '">' + (x.opts || []).map(function (o) { var on = multi ? (Array.isArray(v) && v.indexOf(o) >= 0) : v === o; return '<button type="button" class="opt' + (multi ? ' sq' : '') + (on ? ' on' : '') + '" data-k="' + k + '" data-v="' + esc(o) + '" role="' + (multi ? 'checkbox' : 'radio') + '" aria-checked="' + on + '"' + (ro ? ' disabled' : '') + '><i></i><span>' + esc(o) + '</span></button>'; }).join('') + '</div>'; }
     return '<div class="qf' + (has(v) ? '' : ' miss') + '" data-k="' + k + '">' + lab + body + '</div>';
   }
+  /** 段落說明、範例（有內容才顯示） */
+  function secInfo(s) { var d = ml(s.desc), x = ml(s.ex); return (d ? '<div class="sec-d ml">' + esc(d) + '</div>' : '') + (x ? '<div class="sec-ex"><b>範例</b><div class="ml">' + esc(x) + '</div></div>' : ''); }
   function body() {
     var maxs = Q.filter(function (e) { return isText(e.q); }).map(function (e) { return e.q.max || MAX; }), same = maxs.length && maxs.every(function (m) { return m === maxs[0]; });
-    var intro = clean(F.intro || D.series.intro || '');
-    var h = '<div class="rules">' + (intro ? '<div class="r"><b>說明</b><span>' + esc(intro) + '</span></div>' : '<div class="r"><b>字數</b><span>' + (same ? '問題與背景合併一欄，每題上限 <span class="mono">' + maxs[0] + '</span> 字' : '每題字數上限標示在欄位下方') + '</span></div>') + '<div class="r"><b>修改</b><span>送出後於截止前皆可修改，以最後一次送出為準</span></div></div>';
+    var intro = ml(F.intro || D.series.intro || '');
+    var h = '<div class="rules">' + (intro ? '<div class="r"><b>說明</b><span class="ml">' + esc(intro) + '</span></div>' : '<div class="r"><b>字數</b><span>' + (same ? '問題與背景合併一欄，每題上限 <span class="mono">' + maxs[0] + '</span> 字' : '每題字數上限標示在欄位下方') + '</span></div>') + '<div class="r"><b>修改</b><span>送出後於截止前皆可修改，以最後一次送出為準</span></div></div>';
     (F.sections || []).forEach(function (s, si) {
-      h += '<section class="sec" id="sec' + si + '"><div class="sec-h"><h2>' + esc(s.t) + '</h2>' + (s.en ? '<span class="en">' + esc(s.en) + '</span>' : '') + '</div><div class="card qcard">';
+      h += '<section class="sec" id="sec' + si + '"><div class="sec-h"><h2>' + esc(s.t) + '</h2>' + (s.en ? '<span class="en">' + esc(s.en) + '</span>' : '') + '</div>' + secInfo(s) + '<div class="card qcard">';
       Q.forEach(function (e) { if (e.si === si) h += fieldHtml(e); });
       h += '</div></section>';
     });
