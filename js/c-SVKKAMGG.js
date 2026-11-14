@@ -1,1 +1,0 @@
-import{c as a,d as b,e as c,f as d,g as e}from"./c-TSWYJACE.js";import"./c-KTDQ3GYA.js";import"./c-E6LNFFBH.js";import"./c-6O4G3XTV.js";import"./c-2KRNUPGW.js";import"./c-QXULUDTG.js";export{a as DEMO_WB,d as __handlers,c as demoBookmark,e as installMock,b as onDemoBookmark};
