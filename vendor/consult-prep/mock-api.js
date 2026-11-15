@@ -3036,12 +3036,10 @@
         case 'bookmarklet_seen': {
           var bk = ['roster', 'orders', 'linemap'].indexOf(String(req.kind)) >= 0 ? String(req.kind) : ''; if (!bk) return fail('書籤種類不正確', 'ERR_VALIDATION');
           var bc = s.bookmarkletCheck(req.version), br = req.role === 'assistant' ? 'assistant' : req.role === 'principal' ? 'principal' : '';
-          db.bmLast = db.bmLast || {}; db.bmNotified = db.bmNotified || {};
+          db.bmLast = db.bmLast || {};
           db.bmLast[bk] = { version: bc.version, at: tpeStamp(new Date()), role: br };
-          var bn = 'v' + (bc.version || 'none'), bFirst = bc.outdated && !db.bmNotified[bn], bSent = false;
-          if (bFirst) { db.bmNotified[bn] = tpeStamp(new Date()); var bp = adminPush(db, '【書籤更新】\n◆ 偵測到舊版書籤\n・' + (s.BOOKMARKLET.kinds[bk] || '書籤') + '：' + bc.label + '\n・最新版本：v' + bc.latest, 'auto', 'bm.' + (bc.version || 'none'), ''); bSent = (bp && bp.sent) > 0; }
           saveDb();
-          var bst = bmStatusMock(db); bst.check = bc; bst.notified = bSent; bst.alreadyNotified = bc.outdated && !bFirst;
+          var bst = bmStatusMock(db); bst.check = bc;
           return ok(bst);
         }
         case 'line_quota_cfg_set': {   // 3.3.7 額度設定（備援上限、保留比例）
