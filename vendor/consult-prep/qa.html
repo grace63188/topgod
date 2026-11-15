@@ -239,7 +239,9 @@
   function body() {
     var maxs = Q.filter(function (e) { return isText(e.q); }).map(function (e) { return e.q.max || MAX; }), same = maxs.length && maxs.every(function (m) { return m === maxs[0]; });
     var intro = ml(F.intro || D.series.intro || '');
-    var h = '<div class="rules">' + (intro ? '<div class="r"><b>說明</b><span class="ml">' + esc(intro) + '</span></div>' : '<div class="r"><b>字數</b><span>' + (same ? '問題與背景合併一欄，每題上限 <span class="mono">' + maxs[0] + '</span> 字' : '每題字數上限標示在欄位下方') + '</span></div>') + '<div class="r"><b>修改</b><span>送出後於截止前皆可修改，以最後一次送出為準</span></div></div>';
+    /* 修改說明（後台 作業設計 › 修改說明）：沒有設定＝預設文字；設定成空白＝不顯示這一列 */
+    var editNote = F.editNote != null ? ml(F.editNote) : '送出後於截止前皆可修改，以最後一次送出為準';
+    var h = '<div class="rules">' + (intro ? '<div class="r"><b>說明</b><span class="ml">' + esc(intro) + '</span></div>' : '<div class="r"><b>字數</b><span>' + (same ? '問題與背景合併一欄，每題上限 <span class="mono">' + maxs[0] + '</span> 字' : '每題字數上限標示在欄位下方') + '</span></div>') + (editNote ? '<div class="r"><b>修改</b><span class="ml">' + esc(editNote) + '</span></div>' : '') + '</div>';
     (F.sections || []).forEach(function (s, si) {
       h += '<section class="sec" id="sec' + si + '"><div class="sec-h"><h2>' + esc(s.t) + '</h2>' + (s.en ? '<span class="en">' + esc(s.en) + '</span>' : '') + '</div>' + secInfo(s) + '<div class="card qcard">';
       Q.forEach(function (e) { if (e.si === si) h += fieldHtml(e); });
